@@ -1,0 +1,28 @@
+# .NET
+**/bin/
+**/obj/
+.build/
+*.user
+*.suo
+
+# Angular / Node
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
+npm-debug.log*
+
+# Generated local SPA files
+backend/GestionEscolar.Api/wwwroot/
+
+# Editors and OS
+.vs/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+appsettings.Local.json

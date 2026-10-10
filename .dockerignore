@@ -1,0 +1,12 @@
+.git
+.gitignore
+.config
+.idea
+.vscode
+.build
+**/bin
+**/obj
+**/node_modules
+**/dist
+**/*.user
+**/*.log
