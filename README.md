@@ -2,6 +2,13 @@
 
 Aplicación web demostrable para centralizar personas, cursos, calificaciones, asistencia y consulta familiar. El frontend Angular y la API ASP.NET Core se publican juntos en un único contenedor; PostgreSQL se aloja en Neon.
 
+## Demo publicada
+
+- Aplicación: https://gestion-escolar-mvp.onrender.com
+- Estado del servicio: https://gestion-escolar-mvp.onrender.com/health
+
+El servicio usa el plan gratuito de Render y puede tardar cerca de un minuto en responder después de un período sin actividad. Conviene abrirlo antes de una presentación.
+
 ## Alcance funcional
 
 - Secretaría / Dirección: tablero, altas y edición de personas, activación, vínculos familiares, inscripciones, asignaciones docentes y de preceptoría, publicación de promedios y boletines.
@@ -58,6 +65,8 @@ La aplicación ejecuta automáticamente las migraciones pendientes y una carga i
 - `ASPNETCORE_ENVIRONMENT=Production`.
 
 Render construye el `Dockerfile`; no es necesario tener Docker Desktop instalado localmente. El endpoint `/health` permite verificar el servicio.
+
+Cada push a `main` inicia un despliegue automático en Render.
 
 ## Estructura
 

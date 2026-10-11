@@ -1,6 +1,6 @@
 # Plan del primer MVP funcional — Gestión escolar
 
-Estado: propuesta para revisar antes de implementar. El repositorio está inicializado en `main`, conectado a `https://github.com/molinavtomas/gestion-escolar-mvp.git` y todavía no contiene aplicación.
+Estado: implementado y publicado. El repositorio está conectado a `https://github.com/molinavtomas/gestion-escolar-mvp.git` y la demo está disponible en `https://gestion-escolar-mvp.onrender.com`.
 
 ## 1. Resultado que vamos a entregar
 
