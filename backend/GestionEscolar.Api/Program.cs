@@ -2,6 +2,7 @@ using GestionEscolar.Api.Data;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -10,7 +11,8 @@ if (int.TryParse(Environment.GetEnvironmentVariable("PORT"), out var port))
     builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 }
 
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+var connectionString = NormalizePostgresConnectionString(
+    builder.Configuration.GetConnectionString("DefaultConnection"));
 builder.Services.AddDbContext<AppDbContext>(options =>
 {
     if (string.IsNullOrWhiteSpace(connectionString))
@@ -92,3 +94,30 @@ await using (var scope = app.Services.CreateAsyncScope())
 }
 
 app.Run();
+
+static string? NormalizePostgresConnectionString(string? connectionString)
+{
+    if (string.IsNullOrWhiteSpace(connectionString) ||
+        (!connectionString.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase) &&
+         !connectionString.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase)))
+    {
+        return connectionString;
+    }
+
+    var uri = new Uri(connectionString);
+    var credentials = uri.UserInfo.Split(':', 2);
+    if (credentials.Length != 2)
+    {
+        throw new InvalidOperationException("La URL de PostgreSQL no contiene usuario y contraseña.");
+    }
+
+    return new NpgsqlConnectionStringBuilder
+    {
+        Host = uri.Host,
+        Port = uri.IsDefaultPort ? 5432 : uri.Port,
+        Database = Uri.UnescapeDataString(uri.AbsolutePath.TrimStart('/')),
+        Username = Uri.UnescapeDataString(credentials[0]),
+        Password = Uri.UnescapeDataString(credentials[1]),
+        SslMode = SslMode.Require
+    }.ConnectionString;
+}
