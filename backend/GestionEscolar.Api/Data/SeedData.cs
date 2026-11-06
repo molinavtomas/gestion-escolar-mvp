@@ -1,159 +1,189 @@
-using Microsoft.AspNetCore.Identity;
+using GestionEscolar.Api.Services;
 using Microsoft.EntityFrameworkCore;
 
 namespace GestionEscolar.Api.Data;
 
+/// <summary>
+/// Prepara la base al arrancar la aplicación:
+///  1. Aplica las migraciones pendientes (crea/actualiza las tablas).
+///  2. Si la base está vacía, crea el año lectivo y las materias de 1° a 3° año.
+///  3. Si Seed:DemoData = true, carga personas, notas y asistencia ficticias para la demo.
+///     Si es false, crea solo la cuenta de Dirección indicada en Seed:DirectorDni.
+/// Todo es idempotente: si los datos ya existen, no se duplican.
+/// </summary>
 public static class SeedData
 {
+    /// <summary>Cuentas que se muestran como botones en el login cuando la app está en modo demo.</summary>
+    public static readonly (string Label, string Dni)[] DemoAccounts =
+    [
+        ("Dirección", "20111111"),
+        ("Secretaría", "20222222"),
+        ("Preceptor", "20333333"),
+        ("Profesor", "20444444"),
+        ("Familia", "50111001")
+    ];
+
+    // Materias por año. Las de 1° son exactamente las del boletín que mandó el colegio.
+    // Las de 2° y 3° son las del diseño curricular de la Provincia de Buenos Aires: confirmar con el colegio.
+    // 4° a 6° dependen de la orientación, así que se cargan desde la pantalla "Cursos y materias".
+    private static readonly Dictionary<int, string[]> SubjectsByLevel = new()
+    {
+        [1] =
+        [
+            "CIENCIAS NATURALES", "CIENCIAS SOCIALES", "EDUCACIÓN ARTÍSTICA", "EDUCACIÓN FÍSICA", "INGLÉS",
+            "MATEMÁTICA", "PRÁCTICAS DEL LENGUAJE", "CONSTRUCCIÓN DE LA CIUDADANÍA", "PORTUGUÉS"
+        ],
+        [2] =
+        [
+            "BIOLOGÍA", "CONSTRUCCIÓN DE LA CIUDADANÍA", "EDUCACIÓN ARTÍSTICA", "EDUCACIÓN FÍSICA", "FÍSICO-QUÍMICA",
+            "GEOGRAFÍA", "HISTORIA", "INGLÉS", "MATEMÁTICA", "PRÁCTICAS DEL LENGUAJE", "PORTUGUÉS"
+        ],
+        [3] =
+        [
+            "BIOLOGÍA", "CONSTRUCCIÓN DE LA CIUDADANÍA", "EDUCACIÓN ARTÍSTICA", "EDUCACIÓN FÍSICA", "FÍSICO-QUÍMICA",
+            "GEOGRAFÍA", "HISTORIA", "INGLÉS", "MATEMÁTICA", "PRÁCTICAS DEL LENGUAJE", "PORTUGUÉS"
+        ]
+    };
+
     public static async Task InitializeAsync(IServiceProvider services, IConfiguration configuration)
     {
         var db = services.GetRequiredService<AppDbContext>();
-        if (db.Database.IsRelational())
+        var people = services.GetRequiredService<PeopleService>();
+
+        // 1. Esquema. La base en memoria (desarrollo sin PostgreSQL) no usa migraciones.
+        if (db.Database.IsRelational()) await db.Database.MigrateAsync();
+        else await db.Database.EnsureCreatedAsync();
+
+        // 2. Estructura básica.
+        if (!await db.SchoolYears.AnyAsync())
         {
-            await db.Database.MigrateAsync();
+            var year = configuration.GetValue("Seed:Year", DateTime.UtcNow.Year);
+            db.SchoolYears.Add(new SchoolYear { Year = year, IsActive = true });
+            foreach (var (level, names) in SubjectsByLevel)
+            {
+                db.Subjects.AddRange(names.Select((name, i) => new Subject { Name = name, Level = level, DisplayOrder = i + 1 }));
+            }
+            await db.SaveChangesAsync();
+        }
+
+        // 3. Personas.
+        if (await db.People.AnyAsync()) return;
+
+        if (configuration.GetValue("Seed:DemoData", true))
+        {
+            await SeedDemoAsync(db, people);
         }
         else
         {
-            await db.Database.EnsureCreatedAsync();
+            // Producción con datos reales: solo la cuenta de Dirección para empezar a cargar.
+            var dni = configuration["Seed:DirectorDni"];
+            var name = configuration["Seed:DirectorName"] ?? "Dirección";
+            if (!string.IsNullOrWhiteSpace(dni))
+            {
+                var (_, error) = await people.CreateAsync(name, dni, PersonTypes.Director);
+                if (error is not null) throw new InvalidOperationException($"No se pudo crear la cuenta de Dirección: {error}");
+            }
         }
-
-        if (!await db.People.AnyAsync())
-        {
-            await SeedSchoolAsync(db);
-        }
-
-        await SeedUsersAsync(services, db, configuration);
     }
 
-    private static async Task SeedSchoolAsync(AppDbContext db)
+    /// <summary>Datos ficticios coherentes para mostrar el sistema funcionando.</summary>
+    private static async Task SeedDemoAsync(AppDbContext db, PeopleService people)
     {
-        var admin = new Person { FullName = "Mariana López", Identifier = "DNI-28000111", Email = "secretaria@demo.edu", Type = PersonTypes.Staff };
-        var teacher1 = new Person { FullName = "Laura Gómez", Identifier = "DOC-1001", Email = "docente@demo.edu", Type = PersonTypes.Teacher };
-        var teacher2 = new Person { FullName = "Diego Fernández", Identifier = "DOC-1002", Email = "diego@demo.edu", Type = PersonTypes.Teacher };
-        var preceptor = new Person { FullName = "Pablo Ruiz", Identifier = "PRE-2001", Email = "preceptor@demo.edu", Type = PersonTypes.Preceptor };
-        var responsible1 = new Person { FullName = "Ana Álvarez", Identifier = "DNI-32000222", Email = "familia@demo.edu", Phone = "11 5555-1010", Type = PersonTypes.Responsible };
-        var responsible2 = new Person { FullName = "Carla Torres", Identifier = "DNI-33000333", Email = "carla@demo.edu", Phone = "11 5555-2020", Type = PersonTypes.Responsible };
-        var student1 = new Person { FullName = "Sofía Álvarez", Identifier = "ALU-0001", Type = PersonTypes.Student };
-        var student2 = new Person { FullName = "Mateo Álvarez", Identifier = "ALU-0002", Type = PersonTypes.Student };
-        var student3 = new Person { FullName = "Lucía Torres", Identifier = "ALU-0003", Type = PersonTypes.Student };
-        var student4 = new Person { FullName = "Tomás Medina", Identifier = "ALU-0004", Type = PersonTypes.Student };
-        var student5 = new Person { FullName = "Valentina Suárez", Identifier = "ALU-0005", Type = PersonTypes.Student };
+        var year = await db.SchoolYears.SingleAsync(x => x.IsActive);
+        // Simulamos que estamos en noviembre: ya se publicó hasta la 2° valoración preliminar.
+        year.PublishedStage = PublicationStages.Valoracion2;
 
-        db.People.AddRange(admin, teacher1, teacher2, preceptor, responsible1, responsible2, student1, student2, student3, student4, student5);
-        await db.SaveChangesAsync();
-
-        var year = new SchoolYear { Year = 2026, IsActive = true };
-        db.SchoolYears.Add(year);
-        await db.SaveChangesAsync();
-
-        var term1 = new Term { SchoolYearId = year.Id, Name = "Primer trimestre", StartDate = new DateOnly(2026, 3, 2), EndDate = new DateOnly(2026, 5, 29), AreAveragesPublished = true, IsReportCardPublished = true };
-        var term2 = new Term { SchoolYearId = year.Id, Name = "Segundo trimestre", StartDate = new DateOnly(2026, 6, 1), EndDate = new DateOnly(2026, 8, 31), AreAveragesPublished = true, IsReportCardPublished = false };
-        var term3 = new Term { SchoolYearId = year.Id, Name = "Tercer trimestre", StartDate = new DateOnly(2026, 9, 1), EndDate = new DateOnly(2026, 11, 27), AreAveragesPublished = false, IsReportCardPublished = false };
-        db.Terms.AddRange(term1, term2, term3);
-
-        var course1 = new Course { SchoolYearId = year.Id, Name = "1°", Division = "A" };
-        var course2 = new Course { SchoolYearId = year.Id, Name = "2°", Division = "A" };
+        var course1 = new Course { SchoolYearId = year.Id, Level = 1, Division = "A" };
+        var course2 = new Course { SchoolYearId = year.Id, Level = 2, Division = "A" };
         db.Courses.AddRange(course1, course2);
-
-        var math = new Subject { Name = "Matemática" };
-        var language = new Subject { Name = "Lengua" };
-        var naturalScience = new Subject { Name = "Ciencias Naturales" };
-        var socialScience = new Subject { Name = "Ciencias Sociales" };
-        db.Subjects.AddRange(math, language, naturalScience, socialScience);
         await db.SaveChangesAsync();
 
-        db.FamilyLinks.AddRange(
-            new FamilyLink { ResponsibleId = responsible1.Id, StudentId = student1.Id, Relationship = "Madre" },
-            new FamilyLink { ResponsibleId = responsible1.Id, StudentId = student2.Id, Relationship = "Madre" },
-            new FamilyLink { ResponsibleId = responsible2.Id, StudentId = student3.Id, Relationship = "Madre" });
+        // Pequeño atajo local: crea la persona y falla fuerte si algo sale mal (es solo la demo).
+        async Task<Person> Create(string name, string dni, string type, int? courseId = null)
+        {
+            var (person, error) = await people.CreateAsync(name, dni, type, courseId: courseId);
+            return person ?? throw new InvalidOperationException(error);
+        }
 
-        var enrollment1 = new Enrollment { StudentId = student1.Id, CourseId = course1.Id };
-        var enrollment2 = new Enrollment { StudentId = student2.Id, CourseId = course1.Id };
-        var enrollment3 = new Enrollment { StudentId = student3.Id, CourseId = course1.Id };
-        var enrollment4 = new Enrollment { StudentId = student4.Id, CourseId = course2.Id };
-        var enrollment5 = new Enrollment { StudentId = student5.Id, CourseId = course2.Id };
-        db.Enrollments.AddRange(enrollment1, enrollment2, enrollment3, enrollment4, enrollment5);
+        // ---- Personal ----
+        await Create("Fernández Graciela", "20111111", PersonTypes.Director);
+        await Create("López Mariana", "20222222", PersonTypes.Secretaria);
+        var preceptor = await Create("Ruiz Pablo", "20333333", PersonTypes.Preceptor);
+        var laura = await Create("Gómez Laura", "20444444", PersonTypes.Profesor);
+        var diego = await Create("Sosa Diego", "20555555", PersonTypes.Profesor);
+        var carolina = await Create("Díaz Carolina", "20666666", PersonTypes.Profesor);
 
-        var assignment1 = new TeachingAssignment { TeacherId = teacher1.Id, CourseId = course1.Id, SubjectId = math.Id };
-        var assignment2 = new TeachingAssignment { TeacherId = teacher2.Id, CourseId = course1.Id, SubjectId = language.Id };
-        var assignment3 = new TeachingAssignment { TeacherId = teacher1.Id, CourseId = course2.Id, SubjectId = naturalScience.Id };
-        var assignment4 = new TeachingAssignment { TeacherId = teacher2.Id, CourseId = course2.Id, SubjectId = socialScience.Id };
-        db.TeachingAssignments.AddRange(assignment1, assignment2, assignment3, assignment4);
+        // ---- Alumnos ----
+        string[] names1 = ["Acosta Martina", "Benítez Lucas", "Castro Valentina", "Domínguez Thiago",
+                           "Fernández Sofía", "Giménez Benjamín", "Herrera Emma", "Ibarra Joaquín"];
+        string[] names2 = ["Juárez Catalina", "Luna Mateo", "Medina Isabella", "Núñez Felipe"];
+        for (var i = 0; i < names1.Length; i++) await Create(names1[i], $"5011100{i + 1}", PersonTypes.Alumno, course1.Id);
+        for (var i = 0; i < names2.Length; i++) await Create(names2[i], $"4922200{i + 1}", PersonTypes.Alumno, course2.Id);
+
+        // ---- Asignaciones ----
+        var subjects = await db.Subjects.ToListAsync();
+        int SubjectId(int level, string name) => subjects.Single(x => x.Level == level && x.Name == name).Id;
+
+        db.TeachingAssignments.AddRange(
+            new TeachingAssignment { TeacherId = laura.Id, CourseId = course1.Id, SubjectId = SubjectId(1, "MATEMÁTICA") },
+            new TeachingAssignment { TeacherId = laura.Id, CourseId = course1.Id, SubjectId = SubjectId(1, "CIENCIAS NATURALES") },
+            new TeachingAssignment { TeacherId = laura.Id, CourseId = course2.Id, SubjectId = SubjectId(2, "MATEMÁTICA") },
+            new TeachingAssignment { TeacherId = diego.Id, CourseId = course1.Id, SubjectId = SubjectId(1, "PRÁCTICAS DEL LENGUAJE") },
+            new TeachingAssignment { TeacherId = diego.Id, CourseId = course1.Id, SubjectId = SubjectId(1, "CIENCIAS SOCIALES") },
+            new TeachingAssignment { TeacherId = carolina.Id, CourseId = course1.Id, SubjectId = SubjectId(1, "INGLÉS") },
+            new TeachingAssignment { TeacherId = carolina.Id, CourseId = course1.Id, SubjectId = SubjectId(1, "PORTUGUÉS") });
         db.PreceptorAssignments.AddRange(
             new PreceptorAssignment { PreceptorId = preceptor.Id, CourseId = course1.Id },
             new PreceptorAssignment { PreceptorId = preceptor.Id, CourseId = course2.Id });
         await db.SaveChangesAsync();
 
-        var evaluation1 = new Evaluation { TeachingAssignmentId = assignment1.Id, TermId = term3.Id, Title = "Números y operaciones", Date = new DateOnly(2026, 9, 18) };
-        var evaluation2 = new Evaluation { TeachingAssignmentId = assignment1.Id, TermId = term3.Id, Title = "Resolución de problemas", Date = new DateOnly(2026, 10, 2) };
-        var evaluation3 = new Evaluation { TeachingAssignmentId = assignment2.Id, TermId = term3.Id, Title = "Comprensión lectora", Date = new DateOnly(2026, 9, 25) };
-        db.Evaluations.AddRange(evaluation1, evaluation2, evaluation3);
-        await db.SaveChangesAsync();
+        // ---- Notas de 1° A: 1° cuatrimestre completo, 2° valoración cargada y
+        //      2° cuatrimestre solo en Matemática (así el tablero muestra carga pendiente) ----
+        var enrollments = await db.Enrollments.Where(x => x.CourseId == course1.Id).OrderBy(x => x.Id).ToListAsync();
+        var gradedSubjects = new[] { "MATEMÁTICA", "CIENCIAS NATURALES", "PRÁCTICAS DEL LENGUAJE", "CIENCIAS SOCIALES", "INGLÉS", "PORTUGUÉS" }
+            .Select(name => SubjectId(1, name)).ToList();
 
-        var grades = new[]
+        for (var s = 0; s < enrollments.Count; s++)
         {
-            new Grade { EvaluationId = evaluation1.Id, EnrollmentId = enrollment1.Id, Score = 9, Observation = "Excelente resolución", IsPublished = true, UpdatedAtUtc = DateTime.UtcNow },
-            new Grade { EvaluationId = evaluation1.Id, EnrollmentId = enrollment2.Id, Score = 7, Observation = "Buen trabajo", IsPublished = true, UpdatedAtUtc = DateTime.UtcNow },
-            new Grade { EvaluationId = evaluation1.Id, EnrollmentId = enrollment3.Id, Score = 8, Observation = "Muy buen progreso", IsPublished = true, UpdatedAtUtc = DateTime.UtcNow },
-            new Grade { EvaluationId = evaluation2.Id, EnrollmentId = enrollment1.Id, Score = 8, Observation = "Revisar el último ejercicio", IsPublished = false, UpdatedAtUtc = DateTime.UtcNow },
-            new Grade { EvaluationId = evaluation3.Id, EnrollmentId = enrollment1.Id, Score = 10, Observation = "Lectura fluida", IsPublished = true, UpdatedAtUtc = DateTime.UtcNow },
-            new Grade { EvaluationId = evaluation3.Id, EnrollmentId = enrollment2.Id, Score = 6, Observation = "Practicar inferencias", IsPublished = true, UpdatedAtUtc = DateTime.UtcNow },
-            new Grade { EvaluationId = evaluation3.Id, EnrollmentId = enrollment3.Id, Score = 9, Observation = "Muy buena interpretación", IsPublished = true, UpdatedAtUtc = DateTime.UtcNow }
-        };
-        db.Grades.AddRange(grades);
-
-        var attendanceDate = new DateOnly(2026, 10, 8);
-        db.Attendances.AddRange(
-            new Attendance { EnrollmentId = enrollment1.Id, Date = attendanceDate, Status = "Presente", UpdatedAtUtc = DateTime.UtcNow },
-            new Attendance { EnrollmentId = enrollment2.Id, Date = attendanceDate, Status = "Tarde", Observation = "Ingreso 08:15", UpdatedAtUtc = DateTime.UtcNow },
-            new Attendance { EnrollmentId = enrollment3.Id, Date = attendanceDate, Status = "Ausente", UpdatedAtUtc = DateTime.UtcNow });
-        await db.SaveChangesAsync();
-
-        db.GradeHistory.AddRange(grades.Select(grade => new GradeHistory
-        {
-            GradeId = grade.Id,
-            NewScore = grade.Score,
-            NewObservation = grade.Observation,
-            NewPublished = grade.IsPublished,
-            ChangedBy = "Carga inicial",
-            ChangedAtUtc = grade.UpdatedAtUtc
-        }));
-        await db.SaveChangesAsync();
-    }
-
-    private static async Task SeedUsersAsync(IServiceProvider services, AppDbContext db, IConfiguration configuration)
-    {
-        var userManager = services.GetRequiredService<UserManager<ApplicationUser>>();
-        var password = configuration["DemoSeed:Password"] ?? "Demo1234!";
-
-        var users = new[]
-        {
-            ("secretaria@demo.edu", "Mariana López", Profiles.Administration),
-            ("docente@demo.edu", "Laura Gómez", Profiles.Teacher),
-            ("preceptor@demo.edu", "Pablo Ruiz", Profiles.Preceptor),
-            ("familia@demo.edu", "Ana Álvarez", Profiles.Family)
-        };
-
-        foreach (var (email, name, profile) in users)
-        {
-            if (await userManager.FindByEmailAsync(email) is not null) continue;
-
-            var person = await db.People.SingleAsync(x => x.Email == email);
-            var result = await userManager.CreateAsync(new ApplicationUser
+            for (var m = 0; m < gradedSubjects.Count; m++)
             {
-                UserName = email,
-                Email = email,
-                EmailConfirmed = true,
-                DisplayName = name,
-                Profile = profile,
-                PersonId = person.Id,
-                IsActive = true
-            }, password);
-
-            if (!result.Succeeded)
-            {
-                throw new InvalidOperationException($"No se pudo crear {email}: {string.Join(", ", result.Errors.Select(x => x.Description))}");
+                // Notas "pseudoaleatorias" pero siempre iguales (de 4 a 10), para que la demo sea reproducible.
+                var grade1 = 4 + (s * 3 + m * 5) % 7;
+                var grade2 = 4 + (s * 5 + m * 3 + 2) % 7;
+                db.ReportCardEntries.Add(new ReportCardEntry
+                {
+                    EnrollmentId = enrollments[s].Id,
+                    SubjectId = gradedSubjects[m],
+                    Valuation1 = ValuationFor(grade1),
+                    Grade1 = grade1,
+                    // Quien no aprobó (menos de 7) rinde intensificación.
+                    Intensification1 = grade1 < 7 ? Math.Min(10, grade1 + 3) : null,
+                    Valuation2 = ValuationFor(grade2),
+                    Grade2 = m == 0 ? grade2 : null,
+                    UpdatedAtUtc = DateTime.UtcNow,
+                    UpdatedBy = "Carga inicial"
+                });
             }
         }
+
+        // ---- Asistencia de la última semana en 1° A ----
+        var monday = new DateOnly(year.Year, 11, 2);
+        for (var d = 0; d < 4; d++)
+        {
+            for (var s = 0; s < enrollments.Count; s++)
+            {
+                var status = (s + d) % 9 == 0 ? AttendanceStatuses.Ausente
+                           : (s + d) % 7 == 0 ? AttendanceStatuses.Tarde
+                           : AttendanceStatuses.Presente;
+                db.Attendances.Add(new Attendance
+                {
+                    EnrollmentId = enrollments[s].Id, Date = monday.AddDays(d), Status = status, UpdatedAtUtc = DateTime.UtcNow
+                });
+            }
+        }
+        await db.SaveChangesAsync();
     }
+
+    /// <summary>Valoración conceptual aproximada a partir de una nota numérica.</summary>
+    private static string ValuationFor(int grade) => grade >= 7 ? "TEA" : grade >= 4 ? "TEP" : "TED";
 }

@@ -2,7 +2,7 @@ services:
   - type: web
     name: gestion-escolar-mvp
     runtime: docker
-    plan: free
+    plan: starter # pago (US$7/mes): no se duerme, el link abre al instante
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health
@@ -12,5 +12,8 @@ services:
         value: Production
       - key: ConnectionStrings__DefaultConnection
         sync: false
-      - key: DemoSeed__Password
+      # true = carga datos de ejemplo (para la demo). Con datos reales: false + Seed__DirectorDni
+      - key: Seed__DemoData
+        value: "true"
+      - key: Seed__DirectorDni
         sync: false
