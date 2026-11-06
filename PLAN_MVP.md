@@ -1,3 +1,5 @@
+> **Nota (nov. 2026):** este es el plan del primer MVP. El modelo de evaluaciones/trimestres fue reemplazado por el boletín por cuatrimestres del colegio y el acceso por DNI. Ver README.md para el estado actual.
+
 # Plan del primer MVP funcional — Gestión escolar
 
 Estado: implementado y publicado. El repositorio está conectado a `https://github.com/molinavtomas/gestion-escolar-mvp.git` y la demo está disponible en `https://gestion-escolar-mvp.onrender.com`.
