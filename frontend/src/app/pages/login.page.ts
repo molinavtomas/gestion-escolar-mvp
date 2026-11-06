@@ -17,8 +17,8 @@ interface DemoAccount { label: string; dni: string; }
   template: `
     <main class="login-page">
       <form class="login-card" (ngSubmit)="login()">
-        <img class="login-logo" src="logo.png" alt="Escudo del Colegio de los Buenos Ayres">
-        <h1>Colegio de los Buenos Ayres</h1>
+        <img class="login-logo" src="/api/settings/logo" alt="Logo del colegio">
+        <h1>{{ schoolName() }}</h1>
         <p class="muted">Boletines, calificaciones y asistencia</p>
 
         <label>
@@ -63,6 +63,7 @@ export class LoginPage implements OnInit {
   readonly loading = signal(false);
   readonly error = signal('');
   readonly demoAccounts = signal<DemoAccount[]>([]);
+  readonly schoolName = signal('Colegio de los Buenos Ayres');
 
   ngOnInit() {
     // Si ya hay sesión abierta, vamos directo a la pantalla del rol.
@@ -70,6 +71,8 @@ export class LoginPage implements OnInit {
       if (user) this.router.navigateByUrl(this.auth.homeFor(user.role));
     });
     this.api.get<DemoAccount[]>('/api/auth/demo-accounts').subscribe(x => this.demoAccounts.set(x));
+    // Nombre configurable por el Administrador (Administración > Configuración).
+    this.api.get<{ schoolName: string }>('/api/settings/public').subscribe(s => this.schoolName.set(s.schoolName));
   }
 
   useDemo(account: DemoAccount) {

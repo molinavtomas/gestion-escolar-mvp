@@ -21,6 +21,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<ReportCardEntry> ReportCardEntries => Set<ReportCardEntry>();
     public DbSet<ReportCardChange> ReportCardChanges => Set<ReportCardChange>();
     public DbSet<Attendance> Attendances => Set<Attendance>();
+    public DbSet<SchoolSettings> SchoolSettings => Set<SchoolSettings>();
+    public DbSet<AuditEntry> AuditEntries => Set<AuditEntry>();
+    public DbSet<Notification> Notifications => Set<Notification>();
+    public DbSet<ReportCardAcknowledgement> ReportCardAcknowledgements => Set<ReportCardAcknowledgement>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -28,13 +32,21 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
 
         // ---- Índices únicos: evitan duplicados aunque la interfaz falle ----
         builder.Entity<Person>().HasIndex(x => x.Dni).IsUnique();
-        builder.Entity<Course>().HasIndex(x => new { x.SchoolYearId, x.Level, x.Division }).IsUnique();
-        builder.Entity<Subject>().HasIndex(x => new { x.Level, x.Name }).IsUnique();
+        builder.Entity<Course>().HasIndex(x => new { x.SchoolYearId, x.Nivel, x.Level, x.Division }).IsUnique();
+        builder.Entity<Subject>().HasIndex(x => new { x.Nivel, x.Level, x.Name }).IsUnique();
+        builder.Entity<ReportCardAcknowledgement>().HasIndex(x => new { x.StudentId, x.SchoolYearId, x.Stage }).IsUnique();
+        builder.Entity<SchoolYear>().HasIndex(x => x.Year).IsUnique();
         builder.Entity<Enrollment>().HasIndex(x => new { x.StudentId, x.CourseId }).IsUnique();
         builder.Entity<TeachingAssignment>().HasIndex(x => new { x.CourseId, x.SubjectId, x.TeacherId }).IsUnique();
         builder.Entity<PreceptorAssignment>().HasIndex(x => new { x.PreceptorId, x.CourseId }).IsUnique();
         builder.Entity<ReportCardEntry>().HasIndex(x => new { x.EnrollmentId, x.SubjectId }).IsUnique();
         builder.Entity<Attendance>().HasIndex(x => new { x.EnrollmentId, x.Date }).IsUnique();
+
+        // Índices "de búsqueda" (no únicos): aceleran los filtros más usados.
+        builder.Entity<Person>().HasIndex(x => x.FullName);
+        builder.Entity<Person>().HasIndex(x => x.FamilyGroupId);
+        builder.Entity<AuditEntry>().HasIndex(x => new { x.Kind, x.AtUtc });
+        builder.Entity<Notification>().HasIndex(x => x.CreatedAtUtc);
 
         // ---- Longitudes máximas: documentan el dato y evitan textos absurdos ----
         builder.Entity<Person>().Property(x => x.FullName).HasMaxLength(150);
@@ -42,6 +54,15 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         builder.Entity<Person>().Property(x => x.Type).HasMaxLength(20);
         builder.Entity<Subject>().Property(x => x.Name).HasMaxLength(100);
         builder.Entity<Course>().Property(x => x.Division).HasMaxLength(10);
+        builder.Entity<Course>().Property(x => x.Nivel).HasMaxLength(20);
+        builder.Entity<Subject>().Property(x => x.Nivel).HasMaxLength(20);
+        builder.Entity<ReportCardEntry>().Property(x => x.Observation).HasMaxLength(300);
+        builder.Entity<Enrollment>().Property(x => x.ReportCardComment).HasMaxLength(1000);
+        builder.Entity<SchoolSettings>().Property(x => x.SchoolName).HasMaxLength(150);
+        builder.Entity<AuditEntry>().Property(x => x.Action).HasMaxLength(100);
+        builder.Entity<AuditEntry>().Property(x => x.Detail).HasMaxLength(500);
+        builder.Entity<Notification>().Property(x => x.Title).HasMaxLength(150);
+        builder.Entity<Notification>().Property(x => x.Body).HasMaxLength(2000);
         builder.Entity<ReportCardEntry>().Property(x => x.Valuation1).HasMaxLength(3);
         builder.Entity<ReportCardEntry>().Property(x => x.Valuation2).HasMaxLength(3);
 

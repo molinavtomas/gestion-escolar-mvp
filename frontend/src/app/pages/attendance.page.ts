@@ -1,7 +1,7 @@
-import { Component, computed, inject, OnInit, signal } from '@angular/core';
+import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ApiService, errorMessage } from '../core/api.service';
-import { CourseOption } from '../core/models';
+import { CourseFilterComponent } from '../shared/course-filter.component';
 
 interface AttendanceRow { enrollmentId: number; student: string; dni: string; status: string | null; observation: string | null; }
 interface SummaryRow { student: string; present: number; absent: number; late: number; justified: number; }
@@ -20,21 +20,19 @@ function today(): string {
 }
 
 /**
- * Asistencia diaria. El preceptor elige curso y fecha, marca a cada alumno y guarda.
- * Volver a guardar la misma fecha corrige lo anterior.
+ * Asistencia diaria. Se elige nivel → año → curso y la fecha.
+ *  - Preceptor (sus cursos) y Administración/Dirección (todos): marcan y guardan.
+ *  - Secretaría, Preceptor en otros cursos y Profesores (sus cursos): solo lectura.
+ * Volver a guardar la misma fecha corrige lo anterior. Cada nueva ausencia genera un aviso a la familia.
  */
 @Component({
   selector: 'app-attendance',
-  imports: [FormsModule],
+  imports: [FormsModule, CourseFilterComponent],
   template: `
     <header class="page-header">
       <h1>Asistencia</h1>
       <div class="actions">
-        <label class="inline">Curso
-          <select [(ngModel)]="courseId" (ngModelChange)="load()">
-            @for (c of courses(); track c.id) { <option [ngValue]="c.id">{{ c.label }}</option> }
-          </select>
-        </label>
+        <app-course-filter [allowAll]="false" [(courseId)]="courseId" (changed)="load()" />
         <label class="inline">Fecha <input type="date" [(ngModel)]="date" (ngModelChange)="load()"></label>
       </div>
     </header>
@@ -47,9 +45,10 @@ function today(): string {
         <h2>Lista del curso</h2>
         <div class="actions">
           <span class="muted">{{ counts() }}</span>
-          <button class="button secondary small" (click)="markAll('Presente')">Todos presentes</button>
+          @if (canEdit()) { <button class="button secondary small" (click)="markAll('Presente')">Todos presentes</button> }
         </div>
       </div>
+      @if (!canEdit()) { <p class="hint"><i class="pi pi-eye"></i> Modo lectura: este curso lo carga su preceptor/a.</p> }
       @if (!alreadyTaken()) { <p class="hint">Todavía no se tomó asistencia este día.</p> }
 
       <div class="table-scroll">
@@ -62,11 +61,11 @@ function today(): string {
                 <td>
                   <div class="segmented">
                     @for (s of statuses; track s.value) {
-                      <button [class]="s.css" [class.active]="row.status === s.value" (click)="setStatus(row, s.value)" [title]="s.value">{{ s.short }}</button>
+                      <button [class]="s.css" [class.active]="row.status === s.value" (click)="setStatus(row, s.value)" [title]="s.value" [disabled]="!canEdit()">{{ s.short }}</button>
                     }
                   </div>
                 </td>
-                <td><input [(ngModel)]="row.observation" placeholder="Opcional"></td>
+                <td><input [(ngModel)]="row.observation" placeholder="Opcional" [disabled]="!canEdit()"></td>
               </tr>
             } @empty { <tr><td colspan="3" class="muted">No hay alumnos.</td></tr> }
           </tbody>
@@ -74,7 +73,7 @@ function today(): string {
       </div>
       <div class="action-bar">
         <span class="muted">P: presente · A: ausente · T: tarde · J: justificado</span>
-        <button class="button primary" (click)="save()"><i class="pi pi-save"></i> Guardar asistencia</button>
+        @if (canEdit()) { <button class="button primary" (click)="save()"><i class="pi pi-save"></i> Guardar asistencia</button> }
       </div>
     </section>
 
@@ -88,7 +87,7 @@ function today(): string {
           <thead><tr><th>Alumno/a</th><th>Presentes</th><th>Ausentes</th><th>Tardes</th><th>Justificadas</th></tr></thead>
           <tbody>
             @for (s of summary(); track s.student) {
-              <tr><td>{{ s.student }}</td><td>{{ s.present }}</td><td [class.low]="s.absent > 0">{{ s.absent }}</td><td>{{ s.late }}</td><td>{{ s.justified }}</td></tr>
+              <tr><td>{{ s.student }}</td><td>{{ s.present }}</td><td [class.low]="s.absent >= threshold()">{{ s.absent }}{{ s.absent >= threshold() ? ' ⚠' : '' }}</td><td>{{ s.late }}</td><td>{{ s.justified }}</td></tr>
             }
           </tbody>
         </table>
@@ -96,14 +95,15 @@ function today(): string {
     </section>
   `
 })
-export class AttendancePage implements OnInit {
+export class AttendancePage {
   private readonly api = inject(ApiService);
   readonly statuses = STATUSES;
 
-  courseId: number | null = null;
+  readonly courseId = signal<number | null>(null);
   date = today();
 
-  readonly courses = signal<CourseOption[]>([]);
+  readonly canEdit = signal(false);
+  readonly threshold = signal(10);
   readonly rows = signal<AttendanceRow[]>([]);
   readonly summary = signal<SummaryRow[]>([]);
   readonly alreadyTaken = signal(false);
@@ -116,21 +116,11 @@ export class AttendancePage implements OnInit {
     return STATUSES.map(s => `${rows.filter(r => r.status === s.value).length} ${s.value.toLowerCase()}`).join(' · ');
   });
 
-  ngOnInit() {
-    this.api.get<CourseOption[]>('/api/courses/mine').subscribe({
-      next: courses => {
-        this.courses.set(courses);
-        this.courseId = courses[0]?.id ?? null;
-        this.load();
-      },
-      error: e => this.error.set(errorMessage(e))
-    });
-  }
-
   load() {
-    if (!this.courseId || !this.date) return;
-    this.api.get<AttendanceRow[]>(`/api/courses/${this.courseId}/attendance?date=${this.date}`).subscribe({
-      next: rows => {
+    if (!this.courseId() || !this.date) return;
+    this.api.get<{ canEdit: boolean; rows: AttendanceRow[] }>(`/api/courses/${this.courseId()}/attendance?date=${this.date}`).subscribe({
+      next: ({ canEdit, rows }) => {
+        this.canEdit.set(canEdit);
         this.alreadyTaken.set(rows.some(r => r.status !== null));
         // Si todavía no se tomó, proponemos "Presente" para todos (lo más común).
         this.rows.set(rows.map(r => ({ ...r, status: r.status ?? 'Presente' })));
@@ -151,7 +141,7 @@ export class AttendancePage implements OnInit {
 
   save() {
     const entries = this.rows().map(r => ({ enrollmentId: r.enrollmentId, status: r.status, observation: r.observation }));
-    this.api.post(`/api/courses/${this.courseId}/attendance`, { date: this.date, entries }).subscribe({
+    this.api.post(`/api/courses/${this.courseId()}/attendance`, { date: this.date, entries }).subscribe({
       next: () => {
         this.alreadyTaken.set(true);
         this.message.set('Asistencia guardada.');
@@ -163,7 +153,10 @@ export class AttendancePage implements OnInit {
   }
 
   loadSummary() {
-    if (!this.courseId) return;
-    this.api.get<SummaryRow[]>(`/api/courses/${this.courseId}/attendance-summary`).subscribe(s => this.summary.set(s));
+    if (!this.courseId()) return;
+    this.api.get<{ threshold: number; rows: SummaryRow[] }>(`/api/courses/${this.courseId()}/attendance-summary`).subscribe(s => {
+      this.threshold.set(s.threshold || 10);
+      this.summary.set(s.rows);
+    });
   }
 }

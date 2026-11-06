@@ -23,27 +23,32 @@ public sealed record GradeValues(
         e.December, e.February, e.FinalGrade);
 }
 
-/// <summary>Una fila del boletín: una materia con sus notas.</summary>
-public sealed record ReportCardRow(int SubjectId, string Subject, GradeValues Values);
+/// <summary>Una fila del boletín: una materia con sus notas y la observación del profesor.</summary>
+public sealed record ReportCardRow(int SubjectId, string Subject, GradeValues Values, string? Observation);
 
 /// <summary>Resumen de asistencia que se muestra debajo del boletín.</summary>
 public sealed record AttendanceSummary(int Present, int Absent, int Late, int Justified);
 
-/// <summary>Boletín completo de un alumno.</summary>
+/// <summary>Boletín completo de un alumno en un año lectivo.</summary>
 public sealed record ReportCard(
-    int StudentId, string Student, string Dni, string Course, int Year,
+    int StudentId, string Student, string Dni,
+    string Nivel, string Course, int Year, int SchoolYearId, bool IsCurrentYear,
+    string SchoolName,
     int PublishedStage, string PublishedStageLabel,
     bool IsFamilyView,
     IReadOnlyList<ReportCardRow> Rows,
-    AttendanceSummary Attendance);
+    string? Comment,
+    AttendanceSummary Attendance,
+    DateTime? AcknowledgedAtUtc,
+    string? AcknowledgedBy);
 
 // =====================================================================================
 // Lógica del boletín
 // =====================================================================================
 
 /// <summary>
-/// Reglas de negocio del boletín: validar notas, guardarlas con historial
-/// y armar el boletín de un alumno (ocultando lo no publicado si lo mira la familia).
+/// Reglas de negocio del boletín: validar notas, guardarlas con historial (respetando los
+/// períodos cerrados) y armar el boletín de un alumno (ocultando lo no publicado a las familias).
 /// </summary>
 public sealed class ReportCardService(AppDbContext db)
 {
@@ -86,16 +91,35 @@ public sealed class ReportCardService(AppDbContext db)
     /// Guarda (crea o actualiza) las notas de un alumno en una materia y registra en el
     /// historial cada columna que cambió. No llama a SaveChanges: lo hace quien la usa,
     /// así una grilla completa se guarda en una sola operación.
+    ///
+    /// Si un período está cerrado (<paramref name="year"/>) y quien guarda NO es de conducción
+    /// (<paramref name="canEditClosed"/> = false), cambiar esas columnas devuelve un error.
     /// </summary>
-    public async Task SaveAsync(int enrollmentId, int subjectId, GradeValues values, string changedBy)
+    public async Task<string?> SaveAsync(int enrollmentId, int subjectId, GradeValues values, string? observation,
+        string changedBy, SchoolYear year, bool canEditClosed)
     {
+        observation = string.IsNullOrWhiteSpace(observation) ? null : observation.Trim();
+        if (observation is { Length: > 300 }) return "La observación no puede superar los 300 caracteres.";
+
         var entry = await db.ReportCardEntries
             .SingleOrDefaultAsync(x => x.EnrollmentId == enrollmentId && x.SubjectId == subjectId);
+        var old = entry is null ? GradeValues.Empty : GradeValues.From(entry);
+
+        // ---- Períodos cerrados ----
+        if (!canEditClosed)
+        {
+            var term1Changed = old.Valuation1 != values.Valuation1 || old.Grade1 != values.Grade1 || old.Intensification1 != values.Intensification1;
+            var term2Changed = old.Valuation2 != values.Valuation2 || old.Grade2 != values.Grade2 || old.Intensification2 != values.Intensification2;
+            var finalChanged = old.December != values.December || old.February != values.February || old.FinalGrade != values.FinalGrade;
+            if (term1Changed && year.IsTerm1Closed) return "El 1° cuatrimestre está cerrado. Pedí la corrección a Dirección.";
+            if (term2Changed && year.IsTerm2Closed) return "El 2° cuatrimestre está cerrado. Pedí la corrección a Dirección.";
+            if (finalChanged && year.IsFinalClosed) return "Las notas finales están cerradas. Pedí la corrección a Dirección.";
+        }
 
         if (entry is null)
         {
             // Si la fila no existe y viene vacía, no hace falta crear nada.
-            if (values == GradeValues.Empty) return;
+            if (values == GradeValues.Empty && observation is null) return null;
             entry = new ReportCardEntry { EnrollmentId = enrollmentId, SubjectId = subjectId };
             db.ReportCardEntries.Add(entry);
         }
@@ -128,8 +152,9 @@ public sealed class ReportCardService(AppDbContext db)
         Track("Diciembre", entry.December, values.December);
         Track("Febrero", entry.February, values.February);
         Track("Calificación final", entry.FinalGrade, values.FinalGrade);
+        Track("Observación", entry.Observation, observation);
 
-        if (changes.Count == 0) return;
+        if (changes.Count == 0) return null;
 
         entry.Valuation1 = values.Valuation1;
         entry.Grade1 = values.Grade1;
@@ -140,30 +165,42 @@ public sealed class ReportCardService(AppDbContext db)
         entry.December = values.December;
         entry.February = values.February;
         entry.FinalGrade = values.FinalGrade;
+        entry.Observation = observation;
         entry.UpdatedAtUtc = now;
         entry.UpdatedBy = changedBy;
         db.ReportCardChanges.AddRange(changes);
+        return null;
     }
 
     // ---------------------------------------------------------------- Lectura
 
     /// <summary>
-    /// Arma el boletín del alumno en su curso actual. Si <paramref name="familyView"/> es true,
-    /// borra las columnas que Dirección todavía no publicó.
-    /// Devuelve null si el alumno no existe o no está inscripto.
+    /// Busca la inscripción "que corresponde mostrar" de un alumno:
+    /// la del año pedido, o si no se pide año, la del año activo, o si no tiene, la más reciente.
     /// </summary>
-    public async Task<ReportCard?> BuildAsync(int studentId, bool familyView)
-    {
-        var enrollment = await db.Enrollments.AsNoTracking()
+    public Task<Enrollment?> FindEnrollmentAsync(int studentId, int? schoolYearId) =>
+        db.Enrollments.AsNoTracking()
             .Include(x => x.Student)
             .Include(x => x.Course).ThenInclude(x => x.SchoolYear)
             .Where(x => x.StudentId == studentId && x.IsActive)
-            .SingleOrDefaultAsync();
-        if (enrollment is null) return null;
+            .Where(x => schoolYearId == null || x.Course.SchoolYearId == schoolYearId)
+            .OrderByDescending(x => x.Course.SchoolYear.IsActive) // primero el año activo
+            .ThenByDescending(x => x.Course.SchoolYear.Year)      // si no, el más reciente
+            .FirstOrDefaultAsync();
 
-        // Materias del año del curso, en el orden del boletín.
+    /// <summary>
+    /// Arma el boletín del alumno. Si <paramref name="familyView"/> es true, borra las columnas
+    /// que Dirección todavía no publicó. Devuelve null si el alumno no está inscripto.
+    /// </summary>
+    public async Task<ReportCard?> BuildAsync(int studentId, bool familyView, int? schoolYearId = null)
+    {
+        var enrollment = await FindEnrollmentAsync(studentId, schoolYearId);
+        if (enrollment is null) return null;
+        var course = enrollment.Course;
+
+        // Materias del año del curso (mismo nivel), en el orden del boletín.
         var subjects = await db.Subjects.AsNoTracking()
-            .Where(x => x.Level == enrollment.Course.Level && x.IsActive)
+            .Where(x => x.Nivel == course.Nivel && x.Level == course.Level && x.IsActive)
             .OrderBy(x => x.DisplayOrder).ThenBy(x => x.Name)
             .ToListAsync();
 
@@ -172,15 +209,19 @@ public sealed class ReportCardService(AppDbContext db)
             .Where(x => x.EnrollmentId == enrollment.Id)
             .ToDictionaryAsync(x => x.SubjectId);
 
-        var stage = enrollment.Course.SchoolYear.PublishedStage;
+        // En años anteriores (ya cerrados) se muestra todo: el ciclo terminó.
+        var stage = course.SchoolYear.IsActive ? course.SchoolYear.PublishedStage : PublicationStages.Final;
         var rows = subjects.Select(subject =>
         {
-            var values = entries.TryGetValue(subject.Id, out var e) ? GradeValues.From(e) : GradeValues.Empty;
+            var hasEntry = entries.TryGetValue(subject.Id, out var e);
+            var values = hasEntry ? GradeValues.From(e!) : GradeValues.Empty;
             if (familyView) values = HideUnpublished(values, stage);
-            return new ReportCardRow(subject.Id, subject.Name, values);
+            // La observación del profesor se muestra a la familia recién con el 1° cuatrimestre publicado.
+            var observation = hasEntry && (!familyView || stage >= PublicationStages.Cuatrimestre1) ? e!.Observation : null;
+            return new ReportCardRow(subject.Id, subject.Name, values, observation);
         }).ToList();
 
-        // Resumen de asistencia del curso actual.
+        // Resumen de asistencia de esta inscripción.
         var attendance = await db.Attendances.AsNoTracking()
             .Where(x => x.EnrollmentId == enrollment.Id)
             .GroupBy(x => x.Status)
@@ -188,19 +229,34 @@ public sealed class ReportCardService(AppDbContext db)
             .ToDictionaryAsync(x => x.Status, x => x.Count);
         int Count(string status) => attendance.GetValueOrDefault(status);
 
+        // ¿La familia ya confirmó la lectura de la etapa publicada?
+        var ack = await db.ReportCardAcknowledgements.AsNoTracking()
+            .Where(x => x.StudentId == studentId && x.SchoolYearId == course.SchoolYearId && x.Stage == stage)
+            .FirstOrDefaultAsync();
+
+        var schoolName = await db.SchoolSettings.Select(x => x.SchoolName).FirstOrDefaultAsync() ?? "Colegio";
+
         return new ReportCard(
             enrollment.StudentId,
             enrollment.Student.FullName,
             enrollment.Student.Dni,
-            Course.LabelOf(enrollment.Course.Level, enrollment.Course.Division),
-            enrollment.Course.SchoolYear.Year,
+            course.Nivel,
+            Course.LabelOf(course.Nivel, course.Level, course.Division),
+            course.SchoolYear.Year,
+            course.SchoolYearId,
+            course.SchoolYear.IsActive,
+            schoolName,
             stage,
             PublicationStages.Labels[stage],
             familyView,
             rows,
+            // El comentario general de Dirección también respeta la publicación del 1° cuatrimestre.
+            !familyView || stage >= PublicationStages.Cuatrimestre1 ? enrollment.ReportCardComment : null,
             new AttendanceSummary(
                 Count(AttendanceStatuses.Presente), Count(AttendanceStatuses.Ausente),
-                Count(AttendanceStatuses.Tarde), Count(AttendanceStatuses.Justificado)));
+                Count(AttendanceStatuses.Tarde), Count(AttendanceStatuses.Justificado)),
+            ack?.AtUtc,
+            ack?.AcknowledgedBy);
     }
 
     /// <summary>Vacía las columnas que pertenecen a etapas todavía no publicadas.</summary>

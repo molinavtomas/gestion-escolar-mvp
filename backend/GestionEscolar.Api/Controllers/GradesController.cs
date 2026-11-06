@@ -9,28 +9,28 @@ namespace GestionEscolar.Api.Controllers;
 
 /// <summary>
 /// Carga de calificaciones en forma de grilla (alumnos × columnas del boletín) para UNA materia
-/// de UN curso. La usan los profesores (solo sus materias) y Dirección/Secretaría (todas, para corregir).
+/// de UN curso del año activo. La usan los profesores (solo sus materias) y Administración/Dirección
+/// (todas, para corregir; también pueden modificar períodos cerrados).
 /// </summary>
 [ApiController]
-[Authorize(Roles = Roles.Staff + "," + Roles.Profesor)]
+[Authorize(Roles = Roles.Management + "," + Roles.Profesor)]
 [Route("api/grades")]
 public sealed class GradesController(AppDbContext db, AccessService access, ReportCardService reportCards) : ControllerBase
 {
     /// <summary>
-    /// Materias que el usuario puede cargar. Profesor: las asignadas. Dirección/Secretaría: todas.
+    /// Materias que el usuario puede cargar en el año activo.
+    /// Profesor: las asignadas. Administración/Dirección: todas (curso × materia del mismo nivel y año).
     /// </summary>
     [HttpGet("my-subjects")]
     public async Task<IActionResult> MySubjects()
     {
         List<SubjectOption> options;
-        if (User.IsStaff())
+        if (User.IsManagement())
         {
-            // Staff: todas las combinaciones curso × materia del año del curso.
             options = await (from c in db.Courses.AsNoTracking()
-                             join s in db.Subjects.AsNoTracking() on c.Level equals s.Level
+                             join s in db.Subjects.AsNoTracking() on new { c.Nivel, c.Level } equals new { s.Nivel, s.Level }
                              where c.IsActive && s.IsActive && c.SchoolYear.IsActive
-                             orderby c.Level, c.Division, s.DisplayOrder
-                             select new SubjectOption(c.Id, c.Level, c.Division, s.Id, s.Name))
+                             select new SubjectOption(c.Id, c.Nivel, c.Level, c.Division, s.Id, s.Name, s.DisplayOrder))
                 .ToListAsync();
         }
         else
@@ -38,23 +38,28 @@ public sealed class GradesController(AppDbContext db, AccessService access, Repo
             var personId = User.PersonId();
             options = await db.TeachingAssignments.AsNoTracking()
                 .Where(x => x.TeacherId == personId && x.Course.IsActive && x.Subject.IsActive && x.Course.SchoolYear.IsActive)
-                .OrderBy(x => x.Course.Level).ThenBy(x => x.Course.Division).ThenBy(x => x.Subject.DisplayOrder)
-                .Select(x => new SubjectOption(x.CourseId, x.Course.Level, x.Course.Division, x.SubjectId, x.Subject.Name))
+                .Select(x => new SubjectOption(x.CourseId, x.Course.Nivel, x.Course.Level, x.Course.Division, x.SubjectId, x.Subject.Name, x.Subject.DisplayOrder))
                 .ToListAsync();
         }
 
-        return Ok(options.Select(x => new
-        {
-            x.CourseId, x.SubjectId, x.Subject,
-            Course = Course.LabelOf(x.Level, x.Division)
-        }));
+        return Ok(options
+            .OrderBy(x => AcademicController.NivelOrder(x.Nivel)).ThenBy(x => x.Level).ThenBy(x => x.Division).ThenBy(x => x.Order)
+            .Select(x => new
+            {
+                x.CourseId, x.SubjectId, x.Subject, x.Nivel, x.Level, x.Division,
+                Course = Course.LabelOf(x.Nivel, x.Level, x.Division)
+            }));
     }
 
-    /// <summary>Grilla con todos los alumnos del curso y sus notas en la materia.</summary>
+    /// <summary>
+    /// Grilla con todos los alumnos del curso y sus notas en la materia, más qué períodos están
+    /// cerrados (para que la pantalla bloquee esas columnas).
+    /// </summary>
     [HttpGet("grid")]
     public async Task<IActionResult> Grid([FromQuery] int courseId, [FromQuery] int subjectId)
     {
         if (!await access.CanEditGradesAsync(User, courseId, subjectId)) return Forbid();
+        var year = await db.Courses.Where(x => x.Id == courseId).Select(x => x.SchoolYear).SingleAsync();
 
         // Left join: alumnos sin notas también aparecen (con la fila vacía).
         var rows = await db.Enrollments.AsNoTracking()
@@ -70,47 +75,58 @@ public sealed class GradesController(AppDbContext db, AccessService access, Repo
             })
             .ToListAsync();
 
-        return Ok(rows.Select(x => new
+        return Ok(new
         {
-            x.EnrollmentId, x.StudentId, x.Student, x.Dni,
-            Values = x.Entry is null ? GradeValues.Empty : GradeValues.From(x.Entry),
-            x.Entry?.UpdatedAtUtc,
-            x.Entry?.UpdatedBy
-        }));
+            closed = new { term1 = year.IsTerm1Closed, term2 = year.IsTerm2Closed, final = year.IsFinalClosed },
+            // Conducción puede corregir aunque el período esté cerrado.
+            canEditClosed = User.IsManagement(),
+            rows = rows.Select(x => new
+            {
+                x.EnrollmentId, x.StudentId, x.Student, x.Dni,
+                Values = x.Entry is null ? GradeValues.Empty : GradeValues.From(x.Entry),
+                x.Entry?.Observation,
+                x.Entry?.UpdatedAtUtc,
+                x.Entry?.UpdatedBy
+            })
+        });
     }
 
     /// <summary>
-    /// Guarda la grilla completa. Valida TODAS las filas antes de guardar: si una tiene error,
-    /// no se guarda nada y se indica qué alumno tiene el problema.
+    /// Guarda la grilla completa. Valida TODAS las filas antes de guardar: si una tiene error
+    /// (nota inválida o período cerrado), no se guarda nada y se indica qué alumno tiene el problema.
     /// </summary>
     [HttpPost("grid")]
     public async Task<IActionResult> SaveGrid(SaveGridRequest request)
     {
         if (!await access.CanEditGradesAsync(User, request.CourseId, request.SubjectId)) return Forbid();
+        var year = await db.Courses.Where(x => x.Id == request.CourseId).Select(x => x.SchoolYear).SingleAsync();
+        if (!year.IsActive) return BadRequest(new { message = "Ese año lectivo ya terminó: sus notas no se pueden modificar." });
 
         // Solo se aceptan inscripciones activas de ESE curso (evita que se manipule el request
-        // para cargar notas a alumnos de otro curso).
-        // Primero proyectamos (Select) para que EF traiga el nombre del alumno en la misma consulta;
-        // ToDictionaryAsync por sí solo no sigue la navegación x.Student.
+        // para cargar notas a alumnos de otro curso). Primero proyectamos (Select) para que EF traiga
+        // el nombre del alumno en la misma consulta.
         var students = await db.Enrollments
             .Where(x => x.CourseId == request.CourseId && x.IsActive)
             .Select(x => new { x.Id, x.Student.FullName })
             .ToDictionaryAsync(x => x.Id, x => x.FullName);
 
-        // 1) Validar todo.
-        var validated = new List<(int EnrollmentId, GradeValues Values)>();
+        // 1) Validar formato de todas las filas.
+        var validated = new List<(int EnrollmentId, string Name, GradeValues Values, string? Observation)>();
         foreach (var row in request.Rows)
         {
             if (!students.TryGetValue(row.EnrollmentId, out var name)) continue;
             var (values, error) = ReportCardService.Validate(row.Values);
             if (error is not null) return BadRequest(new { message = $"{name}: {error}" });
-            validated.Add((row.EnrollmentId, values!));
+            validated.Add((row.EnrollmentId, name, values!, row.Observation));
         }
 
-        // 2) Guardar todo junto.
-        foreach (var (enrollmentId, values) in validated)
+        // 2) Guardar (cada fila puede rechazar por período cerrado). Si alguna falla, no se
+        //    llega a SaveChanges y no se guarda nada.
+        foreach (var (enrollmentId, name, values, observation) in validated)
         {
-            await reportCards.SaveAsync(enrollmentId, request.SubjectId, values, User.DisplayName());
+            var error = await reportCards.SaveAsync(enrollmentId, request.SubjectId, values, observation,
+                User.DisplayName(), year, canEditClosed: User.IsManagement());
+            if (error is not null) return BadRequest(new { message = $"{name}: {error}" });
         }
         await db.SaveChangesAsync();
         return NoContent();
@@ -132,8 +148,8 @@ public sealed class GradesController(AppDbContext db, AccessService access, Repo
         return Ok(changes);
     }
 
-    private sealed record SubjectOption(int CourseId, int Level, string Division, int SubjectId, string Subject);
+    private sealed record SubjectOption(int CourseId, string Nivel, int Level, string Division, int SubjectId, string Subject, int Order);
 }
 
-public sealed record GridRowRequest(int EnrollmentId, GradeValues Values);
+public sealed record GridRowRequest(int EnrollmentId, GradeValues Values, string? Observation);
 public sealed record SaveGridRequest(int CourseId, int SubjectId, IReadOnlyList<GridRowRequest> Rows);

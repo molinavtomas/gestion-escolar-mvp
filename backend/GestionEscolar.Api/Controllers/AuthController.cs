@@ -1,3 +1,4 @@
+using GestionEscolar.Api.Auth;
 using GestionEscolar.Api.Data;
 using GestionEscolar.Api.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -16,6 +17,7 @@ namespace GestionEscolar.Api.Controllers;
 public sealed class AuthController(
     UserManager<ApplicationUser> userManager,
     SignInManager<ApplicationUser> signInManager,
+    AuditService audit,
     IConfiguration configuration) : ControllerBase
 {
     /// <summary>Ingreso con DNI y clave. Las familias ingresan con el DNI del alumno.</summary>
@@ -28,7 +30,17 @@ public sealed class AuthController(
         if (dni is null) return Unauthorized(new { message = invalid });
 
         var user = await userManager.Users.SingleOrDefaultAsync(x => x.UserName == dni);
-        if (user is null || !user.IsActive) return Unauthorized(new { message = invalid });
+        if (user is null)
+        {
+            // Cada intento queda en la auditoría de accesos (la ve el Administrador).
+            await audit.AccessAsync(dni, null, null, "DNI inexistente");
+            return Unauthorized(new { message = invalid });
+        }
+        if (!user.IsActive)
+        {
+            await audit.AccessAsync(dni, user.DisplayName, user.Role, "Cuenta desactivada");
+            return Unauthorized(new { message = invalid });
+        }
 
         // lockoutOnFailure: true → tras varios intentos fallidos la cuenta se bloquea unos minutos.
         // Importante porque el DNI no es secreto: frena a quien intente adivinar claves.
@@ -36,10 +48,17 @@ public sealed class AuthController(
             isPersistent: true, lockoutOnFailure: true);
 
         if (result.IsLockedOut)
+        {
+            await audit.AccessAsync(dni, user.DisplayName, user.Role, "Bloqueado por intentos");
             return Unauthorized(new { message = "Demasiados intentos fallidos. Esperá 5 minutos o pedí a Secretaría que restablezca tu clave." });
+        }
         if (!result.Succeeded)
+        {
+            await audit.AccessAsync(dni, user.DisplayName, user.Role, "Clave incorrecta");
             return Unauthorized(new { message = invalid });
+        }
 
+        await audit.AccessAsync(dni, user.DisplayName, user.Role, "Ingreso correcto");
         return Ok(ToResponse(user));
     }
 
@@ -92,13 +111,18 @@ public sealed class AuthController(
         return Ok(SeedData.DemoAccounts.Select(x => new { label = x.Label, dni = x.Dni }));
     }
 
+    /// <summary>
+    /// Datos de sesión + la matriz de permisos del rol. El frontend usa "permissions"
+    /// para armar el menú y mostrar/ocultar botones (la API igual vuelve a verificar todo).
+    /// </summary>
     private static object ToResponse(ApplicationUser user) => new
     {
         user.DisplayName,
         user.Role,
         user.PersonId,
         Dni = user.UserName,
-        user.UsesDefaultPassword
+        user.UsesDefaultPassword,
+        Permissions = Permissions.For(user.Role)
     };
 }
 

@@ -38,7 +38,14 @@ public static class ClaimsPrincipalExtensions
     public static string DisplayName(this ClaimsPrincipal user) =>
         user.FindFirstValue(AppClaimsFactory.DisplayNameClaim) ?? "Usuario";
 
-    /// <summary>true si es Director o Secretaría.</summary>
-    public static bool IsStaff(this ClaimsPrincipal user) =>
-        user.IsInRole(Roles.Director) || user.IsInRole(Roles.Secretaria);
+    /// <summary>Rol de la sesión (uno de <see cref="Roles"/>).</summary>
+    public static string Role(this ClaimsPrincipal user) => user.FindFirstValue(ClaimTypes.Role) ?? string.Empty;
+
+    /// <summary>Administrador o Director: conducción del colegio.</summary>
+    public static bool IsManagement(this ClaimsPrincipal user) =>
+        user.IsInRole(Roles.Administrador) || user.IsInRole(Roles.Director);
+
+    /// <summary>Puede ver todo lo académico: Administrador, Director, Secretaría y Preceptor.</summary>
+    public static bool CanViewAll(this ClaimsPrincipal user) =>
+        user.IsManagement() || user.IsInRole(Roles.Secretaria) || user.IsInRole(Roles.Preceptor);
 }

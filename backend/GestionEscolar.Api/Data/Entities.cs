@@ -28,6 +28,9 @@ public sealed class ApplicationUser : IdentityUser<int>
     /// </summary>
     public bool UsesDefaultPassword { get; set; } = true;
 
+    /// <summary>Última vez que el usuario abrió "Avisos" (para contar los no leídos).</summary>
+    public DateTime? NotificationsSeenAtUtc { get; set; }
+
     /// <summary>Persona a la que pertenece la cuenta. Para "Familia" es el alumno.</summary>
     public int PersonId { get; set; }
     public Person Person { get; set; } = null!;
@@ -51,6 +54,12 @@ public sealed class Person
     public string Type { get; set; } = PersonTypes.Alumno;
 
     public bool IsActive { get; set; } = true;
+
+    /// <summary>
+    /// Grupo familiar (solo alumnos). Los hermanos comparten el mismo número, y con el DNI de
+    /// cualquiera de ellos la familia ve a todos. null = sin hermanos vinculados.
+    /// </summary>
+    public int? FamilyGroupId { get; set; }
 }
 
 /// <summary>
@@ -65,20 +74,31 @@ public sealed class SchoolYear
 
     /// <summary>Uno de los valores de <see cref="PublicationStages"/>.</summary>
     public int PublishedStage { get; set; } = PublicationStages.Nada;
+
+    // Cierre de carga: con el período cerrado, los profesores ya no pueden modificar esas columnas.
+    // Dirección/Administración sí (para corregir errores), y queda en el historial.
+    public bool IsTerm1Closed { get; set; }
+    public bool IsTerm2Closed { get; set; }
+    public bool IsFinalClosed { get; set; }
 }
 
-/// <summary>Curso concreto, ej. "1° A". Level es el año (1 a 6) y Division la letra.</summary>
+/// <summary>
+/// Curso concreto de un año lectivo, ej. "Secundaria 1° A".
+/// Nivel = Inicial/Primaria/Secundaria, Level = año (o sala en Inicial), Division = letra.
+/// </summary>
 public sealed class Course
 {
     public int Id { get; set; }
     public int SchoolYearId { get; set; }
     public SchoolYear SchoolYear { get; set; } = null!;
+    public string Nivel { get; set; } = Niveles.Secundaria;
     public int Level { get; set; }
     public string Division { get; set; } = string.Empty;
     public bool IsActive { get; set; } = true;
 
-    /// <summary>Arma la etiqueta "1° A". Es estático para poder usarlo en proyecciones de EF.</summary>
-    public static string LabelOf(int level, string division) => $"{level}° {division}";
+    /// <summary>Arma la etiqueta "Secundaria 1° A" o "Inicial Sala 4 A".</summary>
+    public static string LabelOf(string nivel, int level, string division) =>
+        nivel == Niveles.Inicial ? $"Inicial Sala {level} {division}" : $"{nivel} {level}° {division}";
 }
 
 /// <summary>
@@ -89,12 +109,16 @@ public sealed class Subject
 {
     public int Id { get; set; }
     public string Name { get; set; } = string.Empty;
+    public string Nivel { get; set; } = Niveles.Secundaria;
     public int Level { get; set; }
     public int DisplayOrder { get; set; }
     public bool IsActive { get; set; } = true;
 }
 
-/// <summary>Inscripción de un alumno en un curso. Un alumno tiene una sola inscripción activa.</summary>
+/// <summary>
+/// Inscripción de un alumno en un curso. Un alumno tiene como mucho una inscripción activa
+/// POR AÑO LECTIVO; las de años anteriores se conservan para poder ver sus boletines.
+/// </summary>
 public sealed class Enrollment
 {
     public int Id { get; set; }
@@ -103,6 +127,9 @@ public sealed class Enrollment
     public int CourseId { get; set; }
     public Course Course { get; set; } = null!;
     public bool IsActive { get; set; } = true;
+
+    /// <summary>Observaciones generales de Dirección que se imprimen en el boletín.</summary>
+    public string? ReportCardComment { get; set; }
 }
 
 /// <summary>Un profesor dicta una materia en un curso. Es lo que le da permiso para cargar esas notas.</summary>
@@ -157,6 +184,9 @@ public sealed class ReportCardEntry
     public int? February { get; set; }
     public int? FinalGrade { get; set; }
 
+    /// <summary>Observación del profesor sobre el alumno en esta materia (se imprime en el boletín).</summary>
+    public string? Observation { get; set; }
+
     public DateTime UpdatedAtUtc { get; set; }
     public string UpdatedBy { get; set; } = string.Empty;
 }
@@ -187,4 +217,71 @@ public sealed class Attendance
     public string Status { get; set; } = AttendanceStatuses.Presente;
     public string? Observation { get; set; }
     public DateTime UpdatedAtUtc { get; set; }
+}
+
+/// <summary>
+/// Configuración institucional (una sola fila). La edita el Administrador.
+/// </summary>
+public sealed class SchoolSettings
+{
+    public int Id { get; set; }
+    public string SchoolName { get; set; } = "Colegio de los Buenos Ayres";
+
+    /// <summary>Logo subido por el Administrador. Si es null se usa el escudo por defecto.</summary>
+    public byte[]? LogoData { get; set; }
+    public string? LogoContentType { get; set; }
+
+    /// <summary>A partir de cuántas inasistencias se marca al alumno con una alerta.</summary>
+    public int AbsenceAlertThreshold { get; set; } = 10;
+}
+
+/// <summary>
+/// Registro de auditoría: ingresos al sistema y cambios administrativos.
+/// Solo lo ve el Administrador (permite controlar a todos, incluido el Director).
+/// </summary>
+public sealed class AuditEntry
+{
+    public int Id { get; set; }
+    public DateTime AtUtc { get; set; }
+    /// <summary><see cref="AuditKinds"/>.</summary>
+    public string Kind { get; set; } = AuditKinds.Cambio;
+    public string? UserDni { get; set; }
+    public string? UserName { get; set; }
+    public string? Role { get; set; }
+    /// <summary>Qué pasó, en pocas palabras (ej. "Alta de persona", "Clave incorrecta").</summary>
+    public string Action { get; set; } = string.Empty;
+    /// <summary>Detalle legible (ej. "Pérez Juan (DNI 45123456) - Alumno").</summary>
+    public string? Detail { get; set; }
+    public string? Ip { get; set; }
+}
+
+/// <summary>
+/// Aviso dentro del sistema para las familias: comunicados, publicación del boletín e inasistencias.
+/// Destino: StudentId (un alumno), CourseId (un curso) o ninguno (todo el colegio).
+/// </summary>
+public sealed class Notification
+{
+    public int Id { get; set; }
+    /// <summary><see cref="NotificationKinds"/>.</summary>
+    public string Kind { get; set; } = NotificationKinds.Comunicado;
+    public string Title { get; set; } = string.Empty;
+    public string Body { get; set; } = string.Empty;
+    public int? StudentId { get; set; }
+    public int? CourseId { get; set; }
+    public DateTime CreatedAtUtc { get; set; }
+    public string CreatedBy { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Confirmación de lectura del boletín por parte de la familia (reemplaza la firma en papel).
+/// Se registra por alumno, año lectivo y etapa publicada.
+/// </summary>
+public sealed class ReportCardAcknowledgement
+{
+    public int Id { get; set; }
+    public int StudentId { get; set; }
+    public int SchoolYearId { get; set; }
+    public int Stage { get; set; }
+    public string AcknowledgedBy { get; set; } = string.Empty;
+    public DateTime AtUtc { get; set; }
 }

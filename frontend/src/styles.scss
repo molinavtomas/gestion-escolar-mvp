@@ -227,6 +227,76 @@ input.short { width: 70px; }
   .student-list { max-height: 240px; }
 }
 
+
+// =====================================================================================
+// Versión 2: filtros, paginación, avisos, administración
+// =====================================================================================
+.spaced-top { margin-top: 1rem; }
+.two-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 0 1.2rem; }
+.filter-group { display: contents; } // los selects del filtro se acomodan como hijos directos de .filters
+.filters { align-items: center; }
+.filters .search { flex: 1 1 220px; }
+.chips.tabs { margin-bottom: 1rem; }
+.checks { display: grid; gap: .3rem; margin-bottom: .8rem; }
+label.check { display: inline-flex; align-items: center; gap: .45rem; margin: 0; font-weight: 600; color: var(--ink); }
+label.check input { min-height: auto; }
+
+.pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .6rem; margin-top: .8rem; }
+.page-number { font-weight: 700; min-width: 60px; text-align: center; }
+
+.simple-table tr.selected-row td { background: var(--yellow-soft); }
+.empty-card { text-align: center; color: var(--muted); padding: 2rem; }
+.empty-card i { font-size: 2rem; color: var(--blue); }
+
+.tag.ok { background: var(--green-soft); color: var(--green); }
+.tag.new { background: var(--yellow); color: var(--blue-dark); }
+.tag.locked { background: var(--red-soft); color: var(--red); }
+.tag.kind-notice { background: var(--blue-soft); color: var(--blue-dark); }
+.tag.kind-publication { background: var(--green-soft); color: var(--green); }
+.tag.kind-absence { background: var(--red-soft); color: var(--red); }
+.ok-text { color: var(--green); }
+.icon-button.danger:hover { color: var(--red); border-color: var(--red); }
+.link-button.danger-link { color: var(--red); font-size: .85rem; margin-left: .5rem; }
+
+// Globito de avisos sin leer en el menú.
+.badge { margin-left: auto; background: var(--yellow); color: var(--blue-dark); border-radius: 999px; padding: 0 .5rem; font-size: .75rem; font-weight: 800; }
+.sidebar nav a.active .badge { background: var(--blue); color: var(--white); }
+
+// Avisos
+.notice { padding: .9rem 0; border-bottom: 1px solid var(--line); }
+.notice:last-child { border-bottom: 0; }
+.notice.unread { background: linear-gradient(90deg, var(--yellow-soft), transparent 60%); padding-left: .6rem; border-radius: 6px; }
+.notice-head { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-bottom: .3rem; }
+.notice p { margin: .2rem 0; white-space: pre-line; }
+
+// Asistencia día por día (familia)
+.status-pill { padding: .15rem .55rem; border-radius: 999px; font-weight: 700; font-size: .85rem; }
+.status-pill.present { background: var(--green-soft); color: var(--green); }
+.status-pill.absent { background: var(--red-soft); color: var(--red); }
+.status-pill.late { background: var(--yellow-soft); color: var(--orange); }
+.status-pill.justified { background: var(--blue-soft); color: var(--blue-dark); }
+.attendance-days { max-height: 360px; overflow-y: auto; }
+
+// Personas: hermanos
+.siblings { padding: .8rem; border: 1px dashed var(--line); border-radius: 8px; margin-bottom: .8rem; }
+.siblings .actions { margin-top: .5rem; }
+
+// Administración: logo
+.logo-row { display: flex; flex-wrap: wrap; align-items: center; gap: 1.2rem; }
+.logo-preview { width: 90px; height: auto; border: 1px solid var(--line); border-radius: 8px; padding: 4px; background: var(--white); }
+
+// Grilla de notas: columna del alumno fija al desplazar en horizontal (cómodo en celulares).
+.grid-table .sticky-col { position: sticky; left: 0; z-index: 1; background: var(--white); box-shadow: 2px 0 0 var(--line); }
+.grid-table thead .sticky-col { background: var(--blue); }
+.grid-table tbody tr:nth-child(even) .sticky-col { background: #fafbfe; }
+.grid-table input:disabled, .grid-table select:disabled { background: #f0f2f7; color: var(--muted); cursor: not-allowed; }
+.grid-table input.obs-input { width: 200px; text-align: left; }
+
+// Boletín: observaciones
+.rc-observations { margin: .6rem 0; }
+.rc-observations ul { margin: .3rem 0 0; padding-left: 1.2rem; }
+.rc-observations li { margin-bottom: .2rem; }
+
 // =====================================================================================
 // Impresión: solo el boletín, sin menús ni botones. Un boletín por hoja.
 // =====================================================================================

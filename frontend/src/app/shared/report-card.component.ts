@@ -1,10 +1,10 @@
-import { Component, input } from '@angular/core';
+import { Component, computed, input } from '@angular/core';
 import { ReportCard } from '../core/models';
 
 /**
  * Boletín con el mismo formato que la planilla del colegio.
  * Es solo de presentación: recibe el boletín ya armado por la API y lo dibuja.
- * Lo usan la familia (Mi boletín) y Dirección/Preceptoría (Boletines).
+ * Lo usan la familia (Mi boletín) y el personal (Boletines).
  * Al imprimir (Ctrl+P o el botón "Imprimir") se ve igual que en papel, sin menús.
  */
 @Component({
@@ -13,10 +13,11 @@ import { ReportCard } from '../core/models';
     @let c = card();
     <article class="report-card">
       <header class="rc-header">
-        <img src="logo.png" alt="Escudo">
+        <!-- El logo lo sirve la API: es el que configuró el Administrador o, si no, el escudo original. -->
+        <img src="/api/settings/logo" alt="Logo">
         <div>
-          <h2>Colegio de los Buenos Ayres</h2>
-          <p>Boletín de calificaciones · Ciclo lectivo {{ c.year }}</p>
+          <h2>{{ c.schoolName }}</h2>
+          <p>Boletín de calificaciones · Ciclo lectivo {{ c.year }}{{ c.isCurrentYear ? '' : ' (cerrado)' }}</p>
         </div>
       </header>
 
@@ -79,8 +80,23 @@ import { ReportCard } from '../core/models';
           {{ c.attendance.present }} presentes · {{ c.attendance.absent }} ausentes ·
           {{ c.attendance.late }} tardes · {{ c.attendance.justified }} justificadas
         </p>
+
+        <!-- Observaciones de los profesores (solo las materias que tienen) y de Dirección. -->
+        @if (observations().length || c.comment) {
+          <div class="rc-observations">
+            <strong>Observaciones</strong>
+            <ul>
+              @for (o of observations(); track o.subjectId) { <li><b>{{ o.subject }}:</b> {{ o.observation }}</li> }
+              @if (c.comment) { <li><b>Dirección:</b> {{ c.comment }}</li> }
+            </ul>
+          </div>
+        }
+
         @if (c.isFamilyView) {
           <p class="muted no-print">Publicado hasta: {{ c.publishedStageLabel }}. Las columnas vacías se completan a medida que Dirección publica.</p>
+        }
+        @if (c.acknowledgedAtUtc) {
+          <p class="muted">Lectura confirmada por la familia el {{ formatDate(c.acknowledgedAtUtc) }}.</p>
         }
         <p class="muted rc-legend">TEA: Trayectoria Educativa Alcanzada · TEP: En Proceso · TED: Discontinua</p>
         <div class="rc-signatures">
@@ -95,8 +111,15 @@ export class ReportCardComponent {
   /** Boletín a mostrar (obligatorio). */
   readonly card = input.required<ReportCard>();
 
+  /** Solo las materias que tienen observación del profesor. */
+  readonly observations = computed(() => this.card().rows.filter(r => !!r.observation));
+
   /** En la Provincia de Buenos Aires se aprueba con 7: las notas menores se resaltan. */
   isLow(value: number | null) {
     return value !== null && value < 7;
+  }
+
+  formatDate(iso: string) {
+    return new Date(iso).toLocaleDateString('es-AR');
   }
 }

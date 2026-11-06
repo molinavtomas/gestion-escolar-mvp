@@ -1,7 +1,7 @@
 import { HttpClient, HttpInterceptorFn } from '@angular/common/http';
 import { inject, Injectable, signal } from '@angular/core';
 import { catchError, Observable, of, tap } from 'rxjs';
-import { Role, SessionUser } from './models';
+import { Permissions, Role, SessionUser } from './models';
 
 /**
  * Hace que todas las llamadas HTTP envíen la cookie de sesión.
@@ -48,16 +48,17 @@ export class AuthService {
   /** Pantalla inicial de cada rol. */
   homeFor(role: Role): string {
     switch (role) {
+      case 'Administrador':
       case 'Director':
-      case 'Secretaria': return '/panel';
+      case 'Secretaria':
+      case 'Preceptor': return '/panel';
       case 'Profesor': return '/calificaciones';
-      case 'Preceptor': return '/asistencia';
       case 'Familia': return '/mi-boletin';
     }
   }
 
-  isStaff(): boolean {
-    const role = this.user()?.role;
-    return role === 'Director' || role === 'Secretaria';
+  /** Atajo para leer un permiso de la sesión: auth.can('managePeople'). */
+  can(permission: keyof Permissions): boolean {
+    return this.user()?.permissions[permission] ?? false;
   }
 }

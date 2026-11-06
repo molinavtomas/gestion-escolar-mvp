@@ -1,34 +1,34 @@
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, computed, inject, OnInit, signal } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { ApiService } from '../core/api.service';
 import { AuthService } from '../core/auth.service';
-import { ROLE_LABELS, Role } from '../core/models';
+import { FiltersService } from '../core/filters.service';
+import { Permissions, ROLE_LABELS } from '../core/models';
+import { NoticesService } from '../core/notices.service';
 
-/** Un ítem del menú lateral. */
-interface NavItem { path: string; label: string; icon: string; }
+/** Un ítem del menú lateral, con el permiso que hace falta para verlo. */
+interface NavItem { path: string; label: string; icon: string; visible: (p: Permissions) => boolean; }
 
-/** Menú de cada rol: cada uno ve solo sus tareas. */
-const NAVIGATION: Record<Role, NavItem[]> = {
-  Director: [
-    { path: '/panel', label: 'Panel', icon: 'pi pi-home' },
-    { path: '/personas', label: 'Personas', icon: 'pi pi-users' },
-    { path: '/cursos', label: 'Cursos y materias', icon: 'pi pi-sitemap' },
-    { path: '/calificaciones', label: 'Calificaciones', icon: 'pi pi-pencil' },
-    { path: '/boletines', label: 'Boletines', icon: 'pi pi-file' },
-    { path: '/asistencia', label: 'Asistencia', icon: 'pi pi-check-square' }
-  ],
-  Secretaria: [], // se completa abajo: igual que Dirección
-  Profesor: [{ path: '/calificaciones', label: 'Mis calificaciones', icon: 'pi pi-pencil' }],
-  Preceptor: [
-    { path: '/asistencia', label: 'Asistencia', icon: 'pi pi-check-square' },
-    { path: '/boletines', label: 'Boletines', icon: 'pi pi-file' }
-  ],
-  Familia: [{ path: '/mi-boletin', label: 'Boletín', icon: 'pi pi-file' }]
-};
-NAVIGATION.Secretaria = NAVIGATION.Director;
+/**
+ * Menú completo. Cada ítem dice con qué permiso se muestra (ver la matriz en models.ts y
+ * en el backend, Auth/Permissions.cs). Así hay UNA sola lista y cada rol ve lo suyo.
+ */
+const NAVIGATION: NavItem[] = [
+  { path: '/panel', label: 'Panel', icon: 'pi pi-home', visible: p => p.viewAll },
+  { path: '/mi-boletin', label: 'Boletín', icon: 'pi pi-file', visible: p => p.family },
+  { path: '/boletines', label: 'Boletines', icon: 'pi pi-file', visible: p => p.viewAll },
+  { path: '/calificaciones', label: 'Calificaciones', icon: 'pi pi-pencil', visible: p => p.editGrades },
+  { path: '/asistencia', label: 'Asistencia', icon: 'pi pi-check-square', visible: p => p.viewAttendance },
+  { path: '/personas', label: 'Personas', icon: 'pi pi-users', visible: p => p.viewAll },
+  { path: '/cursos', label: 'Cursos y materias', icon: 'pi pi-sitemap', visible: p => p.viewAll },
+  { path: '/avisos', label: 'Avisos', icon: 'pi pi-bell', visible: p => p.family || p.viewAll },
+  { path: '/administracion', label: 'Administración', icon: 'pi pi-cog', visible: p => p.admin },
+  { path: '/auditoria', label: 'Auditoría', icon: 'pi pi-shield', visible: p => p.admin }
+];
 
 /**
  * Estructura común de todas las pantallas con sesión: barra lateral con el escudo,
- * menú según el rol, y el contenido de la página a la derecha.
+ * menú según los permisos, y el contenido de la página a la derecha.
  * En celulares la barra se transforma en un encabezado con menú desplegable.
  */
 @Component({
@@ -39,8 +39,8 @@ NAVIGATION.Secretaria = NAVIGATION.Director;
       <aside class="sidebar" [class.open]="menuOpen()">
         <div class="sidebar-top">
           <a class="brand" [routerLink]="home()" (click)="menuOpen.set(false)">
-            <img src="logo.png" alt="Escudo del colegio">
-            <span>Colegio de los<br>Buenos Ayres</span>
+            <img src="/api/settings/logo" alt="Logo del colegio">
+            <span>{{ schoolName() }}</span>
           </a>
           <!-- Botón de menú: solo visible en pantallas chicas -->
           <button class="menu-toggle" (click)="menuOpen.set(!menuOpen())" aria-label="Menú">
@@ -58,6 +58,7 @@ NAVIGATION.Secretaria = NAVIGATION.Director;
             @for (item of navigation(); track item.path) {
               <a [routerLink]="item.path" routerLinkActive="active" (click)="menuOpen.set(false)">
                 <i [class]="item.icon"></i><span>{{ item.label }}</span>
+                @if (item.path === '/avisos' && notices.unread() > 0) { <span class="badge">{{ notices.unread() }}</span> }
               </a>
             }
           </nav>
@@ -82,16 +83,20 @@ NAVIGATION.Secretaria = NAVIGATION.Director;
     </div>
   `
 })
-export class ShellComponent {
+export class ShellComponent implements OnInit {
   readonly auth = inject(AuthService);
+  readonly notices = inject(NoticesService);
+  private readonly api = inject(ApiService);
+  private readonly filters = inject(FiltersService);
   private readonly router = inject(Router);
 
   /** Menú abierto/cerrado en celulares. */
   readonly menuOpen = signal(false);
+  readonly schoolName = signal('Colegio');
 
   readonly navigation = computed(() => {
-    const role = this.auth.user()?.role;
-    return role ? NAVIGATION[role] : [];
+    const permissions = this.auth.user()?.permissions;
+    return permissions ? NAVIGATION.filter(item => item.visible(permissions)) : [];
   });
 
   readonly roleLabel = computed(() => {
@@ -99,12 +104,20 @@ export class ShellComponent {
     return role ? ROLE_LABELS[role] : '';
   });
 
+  ngOnInit() {
+    this.api.get<{ schoolName: string }>('/api/settings/public').subscribe(s => this.schoolName.set(s.schoolName));
+    this.notices.refresh();
+  }
+
   home() {
     const user = this.auth.user();
     return user ? this.auth.homeFor(user.role) : '/login';
   }
 
   logout() {
-    this.auth.logout().subscribe(() => this.router.navigateByUrl('/login'));
+    this.auth.logout().subscribe(() => {
+      this.filters.reset(); // el próximo usuario puede ver otros cursos
+      this.router.navigateByUrl('/login');
+    });
   }
 }

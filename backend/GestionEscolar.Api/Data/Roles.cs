@@ -4,23 +4,37 @@ namespace GestionEscolar.Api.Data;
 /// Roles de las cuentas de usuario. Cada cuenta tiene exactamente un rol.
 /// Se guardan como texto en la base y viajan dentro de la cookie de sesión
 /// como claim de rol, lo que permite usar [Authorize(Roles = ...)] en los controladores.
+///
+/// Matriz de permisos (resumen; el detalle está en Auth/Permissions.cs):
+///   Administrador  → todo (dueñas del colegio).
+///   Director       → gestión académica completa; NO auditoría, configuración, ciclo lectivo
+///                    ni cuentas de Administrador/Director.
+///   Secretaria     → ve todo; da altas/bajas de personas; NO carga notas ni publica.
+///   Preceptor      → ve todo; toma asistencia de SUS cursos; restablece claves de familias.
+///   Profesor       → solo sus materias (notas) y asistencia de sus alumnos (lectura).
+///   Familia        → solo sus hijos.
 /// </summary>
 public static class Roles
 {
+    public const string Administrador = "Administrador";
     public const string Director = "Director";
     public const string Secretaria = "Secretaria";
     public const string Preceptor = "Preceptor";
     public const string Profesor = "Profesor";
     public const string Familia = "Familia";
 
-    /// <summary>
-    /// Personal directivo/administrativo: tiene acceso completo de gestión.
-    /// Es una cadena separada por comas porque así la espera el atributo [Authorize(Roles = ...)].
-    /// </summary>
-    public const string Staff = Director + "," + Secretaria;
+    // Grupos de roles. Son cadenas separadas por comas porque así las espera [Authorize(Roles = ...)].
 
-    /// <summary>Todos los roles, en el orden en que se muestran en la interfaz.</summary>
-    public static readonly string[] All = [Director, Secretaria, Preceptor, Profesor, Familia];
+    /// <summary>Conducción: configura la estructura académica, publica, cierra períodos y corrige notas.</summary>
+    public const string Management = Administrador + "," + Director;
+
+    /// <summary>Pueden dar altas y bajas de personas (Secretaría incluida: SEC-05 queda para más adelante).</summary>
+    public const string PeopleManagers = Management + "," + Secretaria;
+
+    /// <summary>Pueden VER todo lo académico (cursos, boletines, personas, panel).</summary>
+    public const string ViewAll = PeopleManagers + "," + Preceptor;
+
+    public static readonly string[] All = [Administrador, Director, Secretaria, Preceptor, Profesor, Familia];
 }
 
 /// <summary>
@@ -35,8 +49,12 @@ public static class PersonTypes
     public const string Preceptor = "Preceptor";
     public const string Secretaria = "Secretaria";
     public const string Director = "Director";
+    public const string Administrador = "Administrador";
 
-    public static readonly string[] All = [Alumno, Profesor, Preceptor, Secretaria, Director];
+    public static readonly string[] All = [Alumno, Profesor, Preceptor, Secretaria, Director, Administrador];
+
+    /// <summary>Tipos "jerárquicos": solo un Administrador puede crearlos, editarlos o darlos de baja.</summary>
+    public static readonly string[] Protected = [Director, Administrador];
 
     /// <summary>Devuelve el rol de la cuenta que corresponde a cada tipo de persona.</summary>
     public static string RoleFor(string personType) => personType switch
@@ -46,7 +64,30 @@ public static class PersonTypes
         Preceptor => Roles.Preceptor,
         Secretaria => Roles.Secretaria,
         Director => Roles.Director,
+        Administrador => Roles.Administrador,
         _ => throw new ArgumentException($"Tipo de persona desconocido: {personType}")
+    };
+}
+
+/// <summary>
+/// Niveles educativos. Cada curso y cada materia pertenecen a un nivel, así se pueden
+/// tener "1° A de Primaria" y "1° A de Secundaria" con materias distintas.
+/// </summary>
+public static class Niveles
+{
+    public const string Inicial = "Inicial";
+    public const string Primaria = "Primaria";
+    public const string Secundaria = "Secundaria";
+
+    public static readonly string[] All = [Inicial, Primaria, Secundaria];
+
+    /// <summary>Años válidos de cada nivel. En Inicial el "año" es la sala (3, 4 o 5 años).</summary>
+    public static int[] LevelsOf(string nivel) => nivel switch
+    {
+        Inicial => [3, 4, 5],
+        Primaria => [1, 2, 3, 4, 5, 6],
+        Secundaria => [1, 2, 3, 4, 5, 6],
+        _ => []
     };
 }
 
@@ -85,4 +126,21 @@ public static class PublicationStages
         "2° cuatrimestre completo",
         "Boletín final (diciembre, febrero y calificación final)"
     ];
+}
+
+/// <summary>Tipos de aviso que reciben las familias dentro del sistema.</summary>
+public static class NotificationKinds
+{
+    public const string Comunicado = "Comunicado";
+    public const string Publicacion = "Publicación";
+    public const string Inasistencia = "Inasistencia";
+}
+
+/// <summary>Tipos de registro de auditoría.</summary>
+public static class AuditKinds
+{
+    /// <summary>Intentos de ingreso (correctos y fallidos).</summary>
+    public const string Acceso = "Acceso";
+    /// <summary>Cambios administrativos: altas, bajas, publicaciones, asignaciones, configuración...</summary>
+    public const string Cambio = "Cambio";
 }

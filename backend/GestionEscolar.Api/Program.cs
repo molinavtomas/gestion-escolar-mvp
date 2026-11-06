@@ -87,6 +87,8 @@ builder.Services.Configure<SecurityStampValidatorOptions>(o => o.ValidationInter
 builder.Services.AddScoped<AccessService>();
 builder.Services.AddScoped<PeopleService>();
 builder.Services.AddScoped<ReportCardService>();
+builder.Services.AddScoped<AuditService>();
+builder.Services.AddHttpContextAccessor(); // AuditService lee quién hace cada acción
 
 builder.Services.AddAuthorization();
 builder.Services.AddControllers();
@@ -102,10 +104,15 @@ var app = builder.Build();
 // =====================================================================================
 
 // Render pone un proxy delante: estos headers le dicen a la app que el usuario entró por HTTPS.
-app.UseForwardedHeaders(new ForwardedHeadersOptions
+var forwarded = new ForwardedHeadersOptions
 {
     ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
-});
+};
+// Por defecto solo se confía en proxies locales; el proxy de Render tiene otra IP.
+// Sin esto, la auditoría registraría la IP del proxy en vez de la del usuario.
+forwarded.KnownProxies.Clear();
+forwarded.KnownNetworks.Clear();
+app.UseForwardedHeaders(forwarded);
 
 app.UseExceptionHandler();
 

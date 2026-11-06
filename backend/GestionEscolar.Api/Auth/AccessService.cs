@@ -5,21 +5,19 @@ using Microsoft.EntityFrameworkCore;
 namespace GestionEscolar.Api.Auth;
 
 /// <summary>
-/// Centraliza las reglas de "quién puede ver/editar qué". Tenerlas en un solo lugar evita
-/// que un controlador se olvide de un chequeo y que las reglas queden desparramadas.
-///
-/// Reglas:
-///  - Director y Secretaría: todo.
-///  - Profesor: solo las materias/cursos que tiene asignados.
-///  - Preceptor: solo los cursos que tiene asignados.
-///  - Familia: solo el alumno de su propia cuenta.
+/// Reglas de "quién puede ver/editar QUÉ dato concreto" (un curso, una materia, un alumno).
+/// Complementa a <see cref="Permissions"/>, que dice qué puede hacer cada rol en general.
+/// Tenerlas en un solo lugar evita que un controlador se olvide de un chequeo.
 /// </summary>
 public sealed class AccessService(AppDbContext db)
 {
-    /// <summary>¿Puede cargar notas de esta materia en este curso?</summary>
+    /// <summary>
+    /// ¿Puede cargar notas de esta materia en este curso?
+    /// Conducción: todas. Profesor: solo las asignadas. Resto: ninguna.
+    /// </summary>
     public async Task<bool> CanEditGradesAsync(ClaimsPrincipal user, int courseId, int subjectId)
     {
-        if (user.IsStaff()) return true;
+        if (user.IsManagement()) return true;
         if (!user.IsInRole(Roles.Profesor)) return false;
         var personId = user.PersonId();
         return await db.TeachingAssignments.AnyAsync(x =>
@@ -29,13 +27,19 @@ public sealed class AccessService(AppDbContext db)
     /// <summary>¿Puede ver la lista y la asistencia de este curso?</summary>
     public async Task<bool> CanSeeCourseAsync(ClaimsPrincipal user, int courseId)
     {
-        if (user.IsStaff()) return true;
+        if (user.CanViewAll()) return true;
+        if (!user.IsInRole(Roles.Profesor)) return false;
         var personId = user.PersonId();
-        if (user.IsInRole(Roles.Preceptor))
-            return await db.PreceptorAssignments.AnyAsync(x => x.PreceptorId == personId && x.CourseId == courseId);
-        if (user.IsInRole(Roles.Profesor))
-            return await db.TeachingAssignments.AnyAsync(x => x.TeacherId == personId && x.CourseId == courseId);
-        return false;
+        return await db.TeachingAssignments.AnyAsync(x => x.TeacherId == personId && x.CourseId == courseId);
+    }
+
+    /// <summary>¿Puede tomar o corregir asistencia en este curso? Conducción: todos. Preceptor: los suyos.</summary>
+    public async Task<bool> CanTakeAttendanceAsync(ClaimsPrincipal user, int courseId)
+    {
+        if (user.IsManagement()) return true;
+        if (!user.IsInRole(Roles.Preceptor)) return false;
+        var personId = user.PersonId();
+        return await db.PreceptorAssignments.AnyAsync(x => x.PreceptorId == personId && x.CourseId == courseId);
     }
 
     /// <summary>
@@ -44,15 +48,24 @@ public sealed class AccessService(AppDbContext db)
     /// </summary>
     public async Task<bool> CanSeeReportCardAsync(ClaimsPrincipal user, int studentId)
     {
-        if (user.IsStaff()) return true;
-        if (user.IsInRole(Roles.Familia)) return user.PersonId() == studentId;
-        if (user.IsInRole(Roles.Preceptor))
-        {
-            var personId = user.PersonId();
-            // El alumno tiene que estar inscripto en algún curso del preceptor.
-            return await db.Enrollments.AnyAsync(e => e.StudentId == studentId && e.IsActive &&
-                db.PreceptorAssignments.Any(p => p.PreceptorId == personId && p.CourseId == e.CourseId));
-        }
+        if (user.CanViewAll()) return true;
+        if (user.IsInRole(Roles.Familia)) return (await FamilyStudentIdsAsync(user)).Contains(studentId);
         return false;
+    }
+
+    /// <summary>
+    /// Alumnos que puede ver una cuenta familiar: el alumno de la cuenta y sus hermanos
+    /// (los que comparten grupo familiar). Solo alumnos activos.
+    /// </summary>
+    public async Task<List<int>> FamilyStudentIdsAsync(ClaimsPrincipal user)
+    {
+        var ownId = user.PersonId();
+        var groupId = await db.People.Where(x => x.Id == ownId).Select(x => x.FamilyGroupId).SingleOrDefaultAsync();
+        if (groupId is null) return [ownId];
+
+        return await db.People
+            .Where(x => x.FamilyGroupId == groupId && x.IsActive && x.Type == PersonTypes.Alumno)
+            .Select(x => x.Id)
+            .ToListAsync();
     }
 }
