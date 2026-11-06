@@ -185,12 +185,12 @@ input.short { width: 70px; }
 .rc-student dt { font-size: .75rem; text-transform: uppercase; color: var(--muted); font-weight: 700; }
 .rc-student dd { margin: 0; font-weight: 800; font-size: 1.05rem; }
 
-.rc-table { width: 100%; min-width: 760px; border-collapse: collapse; font-size: .9rem; }
+.rc-table { width: 100%; min-width: 640px; border-collapse: collapse; font-size: .9rem; }
 .rc-table th, .rc-table td { border: 1px solid #555; padding: .35rem .3rem; text-align: center; }
 .rc-table thead th { font-weight: 700; font-size: .78rem; background: var(--blue-soft); }
 .rc-table .rc-title { font-size: .95rem; }
-.rc-table tr.rc-small th, .rc-table th.rc-small { font-size: .62rem; font-weight: 600; line-height: 1.15; width: 70px; }
-.rc-table .rc-subject { text-align: left; padding-left: .6rem; font-weight: 600; min-width: 210px; }
+.rc-table tr.rc-small th, .rc-table th.rc-small { font-size: .62rem; font-weight: 600; line-height: 1.15; width: 62px; }
+.rc-table .rc-subject { text-align: left; padding-left: .6rem; font-weight: 600; min-width: 170px; }
 .rc-table .rc-num { width: 28px; color: var(--muted); }
 .rc-table td { height: 34px; font-weight: 700; }
 .rc-table td.rc-final { background: var(--yellow-soft); }

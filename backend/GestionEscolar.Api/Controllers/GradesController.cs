@@ -90,9 +90,12 @@ public sealed class GradesController(AppDbContext db, AccessService access, Repo
 
         // Solo se aceptan inscripciones activas de ESE curso (evita que se manipule el request
         // para cargar notas a alumnos de otro curso).
+        // Primero proyectamos (Select) para que EF traiga el nombre del alumno en la misma consulta;
+        // ToDictionaryAsync por sí solo no sigue la navegación x.Student.
         var students = await db.Enrollments
             .Where(x => x.CourseId == request.CourseId && x.IsActive)
-            .ToDictionaryAsync(x => x.Id, x => x.Student.FullName);
+            .Select(x => new { x.Id, x.Student.FullName })
+            .ToDictionaryAsync(x => x.Id, x => x.FullName);
 
         // 1) Validar todo.
         var validated = new List<(int EnrollmentId, GradeValues Values)>();
