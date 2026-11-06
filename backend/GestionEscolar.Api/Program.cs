@@ -5,9 +5,12 @@
 using GestionEscolar.Api.Auth;
 using GestionEscolar.Api.Data;
 using GestionEscolar.Api.Services;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -62,7 +65,9 @@ builder.Services.ConfigureApplicationCookie(options =>
     options.Cookie.Name = "colegio-session";
     options.Cookie.HttpOnly = true;            // inaccesible desde JavaScript
     options.Cookie.SameSite = SameSiteMode.Lax;
-    options.ExpireTimeSpan = TimeSpan.FromDays(7);
+    // Por ahora la sesión prácticamente no vence (pedido del cliente): dura un año y se
+    // renueva sola con el uso. Para volver a una expiración corta, bajar este valor.
+    options.ExpireTimeSpan = TimeSpan.FromDays(365);
     options.SlidingExpiration = true;          // se renueva mientras se use
     // Es una API: en vez de redirigir a una página de login, respondemos 401/403
     // y el frontend decide qué mostrar.
@@ -81,6 +86,14 @@ builder.Services.ConfigureApplicationCookie(options =>
 // Si se desactiva una cuenta o se cambia la clave, las sesiones abiertas se invalidan
 // en el próximo minuto (por defecto Identity lo revisa cada 30 minutos).
 builder.Services.Configure<SecurityStampValidatorOptions>(o => o.ValidationInterval = TimeSpan.FromMinutes(1));
+
+// ---- Llaves de las cookies guardadas en la base ----
+// Sin esto, cada reinicio del servidor (Render reinicia en cada despliegue) cerraba todas las
+// sesiones. Ver Auth/DbXmlRepository.cs.
+builder.Services.AddDataProtection().SetApplicationName("GestionEscolar");
+builder.Services.AddSingleton<IConfigureOptions<KeyManagementOptions>>(sp =>
+    new ConfigureOptions<KeyManagementOptions>(options =>
+        options.XmlRepository = new DbXmlRepository(sp.GetRequiredService<IServiceScopeFactory>())));
 
 // ---- Servicios propios ----
 // Scoped = una instancia por request (igual que el DbContext que usan).

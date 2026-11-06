@@ -6,7 +6,7 @@ import { provideRouter, TitleStrategy, RouterStateSnapshot } from '@angular/rout
 import { Injectable } from '@angular/core';
 import { Title } from '@angular/platform-browser';
 import { routes } from './app.routes';
-import { credentialsInterceptor } from './core/auth.service';
+import { credentialsInterceptor, sessionInterceptor } from './core/auth.service';
 
 // Fechas y números en formato argentino (ej. 06/11/2026).
 registerLocaleData(localeEsAr);
@@ -27,6 +27,6 @@ export const appConfig: ApplicationConfig = {
     { provide: LOCALE_ID, useValue: 'es-AR' },
     provideRouter(routes),
     { provide: TitleStrategy, useClass: SchoolTitleStrategy },
-    provideHttpClient(withInterceptors([credentialsInterceptor]))
+    provideHttpClient(withInterceptors([credentialsInterceptor, sessionInterceptor]))
   ]
 };

@@ -1,6 +1,7 @@
-import { HttpClient, HttpInterceptorFn } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse, HttpInterceptorFn } from '@angular/common/http';
+import { Router } from '@angular/router';
 import { inject, Injectable, signal } from '@angular/core';
-import { catchError, Observable, of, tap } from 'rxjs';
+import { catchError, Observable, of, tap, throwError } from 'rxjs';
 import { Permissions, Role, SessionUser } from './models';
 
 /**
@@ -10,6 +11,25 @@ import { Permissions, Role, SessionUser } from './models';
  */
 export const credentialsInterceptor: HttpInterceptorFn = (request, next) =>
   next(request.clone({ withCredentials: true }));
+
+/**
+ * Si la API responde 401 (sesión vencida o cerrada) en medio del uso, vamos al login
+ * en lugar de mostrar un error en la pantalla. Se excluyen las llamadas de /api/auth,
+ * que ya manejan el 401 por su cuenta (ej. clave incorrecta).
+ */
+export const sessionInterceptor: HttpInterceptorFn = (request, next) => {
+  const router = inject(Router);
+  const auth = inject(AuthService);
+  return next(request).pipe(
+    catchError((error: unknown) => {
+      if (error instanceof HttpErrorResponse && error.status === 401 && !request.url.includes('/api/auth/')) {
+        auth.user.set(null);
+        router.navigateByUrl('/login');
+      }
+      return throwError(() => error);
+    })
+  );
+};
 
 /**
  * Estado de la sesión. `user` es una signal: cualquier componente que la lea

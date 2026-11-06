@@ -285,3 +285,14 @@ public sealed class ReportCardAcknowledgement
     public string AcknowledgedBy { get; set; } = string.Empty;
     public DateTime AtUtc { get; set; }
 }
+
+/// <summary>
+/// Llave de protección de datos (firma de las cookies de sesión). La usa Auth/DbXmlRepository
+/// para que las sesiones no se pierdan cuando el servidor se reinicia.
+/// </summary>
+public sealed class DataProtectionKey
+{
+    public int Id { get; set; }
+    public string? FriendlyName { get; set; }
+    public string Xml { get; set; } = string.Empty;
+}

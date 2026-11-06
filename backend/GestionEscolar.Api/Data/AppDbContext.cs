@@ -25,6 +25,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<AuditEntry> AuditEntries => Set<AuditEntry>();
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<ReportCardAcknowledgement> ReportCardAcknowledgements => Set<ReportCardAcknowledgement>();
+    public DbSet<DataProtectionKey> DataProtectionKeys => Set<DataProtectionKey>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
