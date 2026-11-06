@@ -222,6 +222,26 @@ namespace GestionEscolar.Api.Migrations
                     b.ToTable("Courses");
                 });
 
+            modelBuilder.Entity("GestionEscolar.Api.Data.DataProtectionKey", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("FriendlyName")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Xml")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("DataProtectionKeys");
+                });
+
             modelBuilder.Entity("GestionEscolar.Api.Data.Enrollment", b =>
                 {
                     b.Property<int>("Id")
